@@ -1,0 +1,68 @@
+/* The panel reads as part of Obsidian: spacing and colour come from theme
+   variables, so it follows whatever theme the user already chose. */
+.cymose-panel {
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+	padding: 12px;
+	height: 100%;
+}
+
+.cymose-status {
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+}
+
+.cymose-field {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+}
+
+.cymose-field label {
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+}
+
+.cymose-field select,
+.cymose-prompt {
+	width: 100%;
+}
+
+.cymose-prompt {
+	resize: vertical;
+	font-family: var(--font-text);
+}
+
+.cymose-actions {
+	display: flex;
+	gap: 8px;
+}
+
+/* The answer as it streams. Flexed so it takes the leftover height instead of
+   growing the panel past the window. */
+.cymose-preview {
+	flex: 1;
+	min-height: 80px;
+	overflow-y: auto;
+	white-space: pre-wrap;
+	padding: 8px 10px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 6px;
+	background: var(--background-secondary);
+	color: var(--text-normal);
+	font-size: var(--font-ui-small);
+	line-height: 1.5;
+}
+
+.cymose-notice {
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 8px;
+	padding: 10px 12px;
+	margin-bottom: 18px;
+	color: var(--text-muted);
+	font-size: var(--font-ui-small);
+}
+
+.cymose-notice p { margin: 0 0 6px; }
+.cymose-notice p:last-child { margin-bottom: 0; }
