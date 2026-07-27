@@ -1,7 +1,7 @@
 # Cymose for Obsidian
 
 Branch an AI conversation across a real Obsidian canvas instead of one linear
-chat.
+chat. — [cymose.dev/obsidian](https://cymose.dev/obsidian)
 
 Ask the same question three ways, keep the answer that held up, and still be
 able to find the two that didn't — and why. Every other AI plugin for Obsidian
