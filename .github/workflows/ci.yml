@@ -1,0 +1,23 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm install
+      # `build` runs `tsc --noEmit` before bundling, so a type error fails here
+      # rather than in someone's vault. esbuild alone would happily bundle it.
+      - run: npm run build
+      # The three files Obsidian actually loads. A build that doesn't produce
+      # them is a release nobody can install.
+      - name: Check release artifacts exist
+        run: test -f main.js && test -f manifest.json && test -f styles.css
