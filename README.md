@@ -97,17 +97,57 @@ wasteful after that; compressing ancestors into a summary is the next thing.
 
 ## Install
 
-Not in the community plugin directory yet. Build it and drop it in:
+**From Obsidian** — Settings → Community plugins → Browse → search **Cymose**.
+Not listed yet; the submission goes in once the loop is worth a stranger's
+time, and this line will be true when it is.
+
+**Until then, [BRAT](https://github.com/TfTHacker/obsidian42-brat)** is the
+one-step path: install BRAT, run *Add beta plugin*, paste
+`cymosehq/cymose-obsidian`. It installs from the latest release and keeps
+itself updated.
+
+**Or by hand**, from a release:
 
 ```sh
-npm install
-npm run build
+# Download main.js, manifest.json and styles.css from
+# https://github.com/cymosehq/cymose-obsidian/releases/latest
 mkdir -p /path/to/vault/.obsidian/plugins/cymose
-cp main.js manifest.json styles.css /path/to/vault/.obsidian/plugins/cymose/
+mv main.js manifest.json styles.css /path/to/vault/.obsidian/plugins/cymose/
 ```
 
-Then enable it in Settings → Community plugins. Or point
-[BRAT](https://github.com/TfTHacker/obsidian42-brat) at this repository.
+Then enable it in Settings → Community plugins, and paste an OpenRouter key in
+Settings → Cymose.
+
+## Releasing
+
+Tag-driven. Obsidian's convention is a bare version with no leading `v`, and
+the tag must match `manifest.json` — the directory installs by version, so a
+mismatch is a release that looks fine until someone tries to install it.
+
+```sh
+# bump manifest.json and package.json to the same version, commit, then:
+git tag 0.1.1 && git push origin 0.1.1
+```
+
+The workflow builds, checks the tag against the manifest, and attaches
+`main.js`, `manifest.json` and `styles.css` to the release as individual files
+— BRAT and the community directory fetch them by name, and a zip of the same
+three installs as nothing.
+
+### Getting into the community directory
+
+1. The repository needs `manifest.json`, `README.md` and `LICENSE` at its root
+   (they are) and must be public.
+2. Cut a release whose tag equals `manifest.json`'s version, with those three
+   files attached — the workflow above does exactly this.
+3. Fork [obsidianmd/obsidian-releases](https://github.com/obsidianmd/obsidian-releases),
+   add an entry to `community-plugins.json` with the plugin `id`, `name`,
+   `author`, `description` and `repo` (`cymosehq/cymose-obsidian`), and open a
+   pull request.
+4. A bot checks the manifest and the release; a human reviews after it passes.
+   Expect changes to be requested — the common ones are the plugin id, using
+   `innerHTML`, and touching files outside the vault. This plugin does none of
+   those, but the review is real and it takes weeks, not days.
 
 ## Contributing
 
