@@ -1,0 +1,52 @@
+name: release
+
+# Tag-driven, and the tag has to match manifest.json — Obsidian installs by
+# version, and a release whose tag and manifest disagree installs the wrong one
+# or nothing at all.
+#
+#   npm version 0.1.1 --no-git-tag-version   # bump manifest.json by hand too
+#   git tag 0.1.1 && git push --tags
+#
+# Obsidian's convention is a bare version tag with no leading v.
+on:
+  push:
+    tags: ["*.*.*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - run: npm install
+      - run: npm run build
+
+      # The directory installs from the manifest at the tag, so a mismatch is a
+      # broken release that looks fine until someone tries to install it.
+      - name: Tag must match manifest.json
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          manifest=$(node -p "require('./manifest.json').version")
+          if [ "$manifest" != "${GITHUB_REF_NAME}" ]; then
+            echo "manifest.json says $manifest, tag says ${GITHUB_REF_NAME}" >&2
+            exit 1
+          fi
+
+      # Exactly these three, at the root of the release. BRAT and the community
+      # directory both fetch them by name; a zip of them is not the same thing
+      # and installs as nothing.
+      - uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: |
+            main.js
+            manifest.json
+            styles.css
+          generate_release_notes: true
