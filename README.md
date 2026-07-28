@@ -16,9 +16,12 @@ single line.
   key: one key, every model (Claude, GPT, Gemini, DeepSeek, Qwen, Kimi, GLM…).
   There is no Cymose account, no server of ours in the path of a message, and
   no telemetry. You pay OpenRouter directly at their rates.
-- **Integration with [Cymose Web](https://cymose.dev) comes later.** Syncing a
-  canvas here with the web product is a later milestone. Nothing in this build
-  talks to it.
+- **Cymose Web integration reads only.** If you also use Cymose on the web, you
+  can pull a tree you planned there onto a canvas here (see [Pull a tree from
+  the web](#pull-a-tree-from-the-web)). It is optional, off until you paste a
+  token, and one-directional: nothing in your vault is uploaded, and turns
+  still go straight to OpenRouter on your own key. Writing back is a later
+  milestone.
 
 ## This code was written by an AI
 
@@ -74,6 +77,24 @@ That one decision buys most of the product:
 4. To branch: change **Branch from** to any earlier node and ask something
    else. The new line inherits that node's history, not its siblings'.
 
+### Pull a tree from the web
+
+Optional, and only if you also use Cymose on the web.
+
+1. Settings → Cymose → **Cymose access token**, from your account on the web.
+2. Command palette → **Cymose: Pull a tree from Cymose Web**, then pick a tree.
+
+It writes a new canvas with the structure of that tree: each node's title, the
+conclusions promoted up from its branches, and the names of any notes pinned to
+it. Not the transcripts — a canvas of full conversations is unreadable at the
+zoom level where a tree is useful, and the export doesn't carry them anyway.
+
+Pulling the same tree again updates the nodes where they stand instead of
+adding a second copy, and anything you dragged keeps its position. Nodes
+deleted on the web are left alone: this is a mirror, not a replica, and
+deleting something out of your vault because a server stopped mentioning it is
+not a trade worth making.
+
 ## What's not here
 
 The concept this is built from includes a lot more. Honest state of it:
@@ -90,6 +111,8 @@ The concept this is built from includes a lot more. Honest state of it:
 | Ask-the-whole-tree | not yet |
 | Scheduled nodes (Flows), web search, attachments, voice | not yet |
 | Summarised (rather than full) ancestor context | not yet |
+| Pull a tree from Cymose Web | **works** (read-only) |
+| Push changes back to the web | not yet |
 | Providers other than OpenRouter | not yet — the adapter interface is there |
 
 Long branches send their full history today. That is fine for a dozen turns and

@@ -1,9 +1,10 @@
-import { Notice, Plugin, TFile, WorkspaceLeaf } from "obsidian";
+import { FuzzySuggestModal, Notice, Plugin, TFile, WorkspaceLeaf } from "obsidian";
 import { CymoseSettingTab, CymoseSettings, DEFAULT_SETTINGS } from "./settings";
 import { OpenRouterAdapter } from "./providers/openrouter";
 import type { ModelAdapter } from "./providers/types";
 import { CymoseView, VIEW_TYPE } from "./view";
 import { appendNode, COLOR_USER, createCanvas, readCanvas, writeCanvas } from "./canvas";
+import { fetchTree, mirrorSubtree, roots, subtree, SyncError, type SyncNode } from "./sync";
 
 // Cymose for Obsidian — 0.1 beta.
 //
@@ -42,6 +43,11 @@ export default class CymosePlugin extends Plugin {
 			id: "new-conversation",
 			name: "New conversation",
 			callback: () => void this.newConversation(),
+		});
+		this.addCommand({
+			id: "pull-from-web",
+			name: "Pull a tree from Cymose Web",
+			callback: () => void this.pullFromWeb(),
 		});
 		this.addCommand({
 			id: "conversation-from-note",
@@ -97,6 +103,66 @@ export default class CymosePlugin extends Plugin {
 	}
 
 	/**
+	 * Mirrors a tree planned on the web onto a canvas here.
+	 *
+	 * This is the point of the two products being one product. The plan lives
+	 * in the browser — you sketch it, branch it three ways, promote what held
+	 * up — and then you come to Obsidian to write the thing out properly. Until
+	 * now that meant retyping it, which is the copy-paste this whole product
+	 * exists to abolish.
+	 *
+	 * Reading only. Nothing in the vault goes back up, and a mirrored node you
+	 * edit here stays here.
+	 */
+	async pullFromWeb(): Promise<void> {
+		const { cymoseApiUrl, cymoseToken } = this.settings;
+		if (!cymoseToken.trim()) {
+			new Notice("Cymose: add your access token in settings first.");
+			return;
+		}
+
+		let picks: SyncNode[];
+		let tree;
+		try {
+			new Notice("Cymose: reading your web tree…");
+			tree = await fetchTree(cymoseApiUrl, cymoseToken);
+			picks = roots(tree);
+		} catch (error) {
+			// SyncError messages are written to be shown; anything else is a bug
+			// and says so rather than pretending to be advice.
+			new Notice(
+				error instanceof SyncError
+					? `Cymose: ${error.message}`
+					: `Cymose: pull failed — ${(error as Error).message}`,
+			);
+			return;
+		}
+
+		if (!picks.length) {
+			new Notice("Cymose: nothing to pull — there are no chats on the web yet.");
+			return;
+		}
+
+		new RootPicker(this, picks, async (root) => {
+			try {
+				const nodes = subtree(tree, root.id);
+				const file = await createCanvas(this.app.vault, this.settings.folder, root.title || "Cymose tree");
+				const data = await readCanvas(this.app.vault, file);
+				const map = (this.settings.syncMap[file.path] ??= {});
+				const { added } = mirrorSubtree(data, nodes, map);
+				await writeCanvas(this.app.vault, file, data);
+				await this.saveSettings();
+				await this.app.workspace.getLeaf(true).openFile(file);
+				const panel = await this.openPanel();
+				await panel?.openFile(file);
+				new Notice(`Cymose: pulled ${added} node${added === 1 ? "" : "s"}.`);
+			} catch (error) {
+				new Notice(`Cymose: ${(error as Error).message}`);
+			}
+		}).open();
+	}
+
+	/**
 	 * Opens a conversation seeded with the current note.
 	 *
 	 * This is the reason the plugin belongs in Obsidian rather than anywhere
@@ -118,5 +184,36 @@ export default class CymosePlugin extends Plugin {
 		await writeCanvas(this.app.vault, file, data);
 		const panel = await this.openPanel();
 		await panel?.openFile(file);
+	}
+}
+
+/**
+ * Which tree to pull.
+ *
+ * A picker rather than "pull everything": an account can hold dozens of
+ * unrelated chats, and dumping all of them into one vault folder is not a
+ * feature, it is a mess someone has to clean up by hand.
+ */
+class RootPicker extends FuzzySuggestModal<SyncNode> {
+	constructor(
+		plugin: CymosePlugin,
+		private roots: SyncNode[],
+		private onPick: (root: SyncNode) => void,
+	) {
+		super(plugin.app);
+		this.setPlaceholder("Which tree?");
+	}
+
+	getItems(): SyncNode[] {
+		return this.roots;
+	}
+
+	getItemText(root: SyncNode): string {
+		const branches = root.promoted_digest?.trim() ? " · has promoted conclusions" : "";
+		return `${root.title || "Untitled"}${branches}`;
+	}
+
+	onChooseItem(root: SyncNode): void {
+		this.onPick(root);
 	}
 }

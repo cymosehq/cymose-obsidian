@@ -1,5 +1,6 @@
 import { App, PluginSettingTab, Setting } from "obsidian";
 import type CymosePlugin from "./main";
+import type { SyncMap } from "./sync";
 
 export interface CymoseSettings {
 	/** OpenRouter key. Lives in this vault's plugin data, never leaves it
@@ -12,6 +13,12 @@ export interface CymoseSettings {
 	folder: string;
 	/** Prepended to every conversation. Empty means none. */
 	systemPrompt: string;
+	/** Cymose API address. Only used by the tree pull; empty disables it. */
+	cymoseApiUrl: string;
+	/** Cymose access token, for reading your web tree. Never sent anywhere else. */
+	cymoseToken: string;
+	/** Which canvas node mirrors which Cymose node, per canvas path. See sync.ts. */
+	syncMap: SyncMap;
 }
 
 // A sensible default that is cheap, fast and good enough to judge the plugin
@@ -25,6 +32,9 @@ export const DEFAULT_SETTINGS: CymoseSettings = {
 	folder: "Cymose",
 	systemPrompt:
 		"You are part of a branching conversation on a canvas. Answer the current message directly and concisely. Earlier messages are the branch you are on; do not restate them.",
+	cymoseApiUrl: "https://api.cymose.cloud",
+	cymoseToken: "",
+	syncMap: {},
 };
 
 // Suggestions, not a whitelist — the field stays free text so a model released
@@ -143,6 +153,41 @@ export class CymoseSettingTab extends PluginSettingTab {
 					.setValue(this.plugin.settings.folder)
 					.onChange(async (value) => {
 						this.plugin.settings.folder = value.trim();
+						await this.plugin.saveSettings();
+					}),
+			);
+
+		containerEl.createEl("h3", { text: "Cymose Web (optional)" });
+		const syncNote = containerEl.createDiv({ cls: "cymose-notice" });
+		syncNote.createEl("p", {
+			text:
+				"If you also use Cymose on the web, you can pull a tree you planned there onto a canvas here. " +
+				"Reading only — nothing in your vault is uploaded, and turns still go straight to OpenRouter on your own key.",
+		});
+
+		new Setting(containerEl)
+			.setName("Cymose access token")
+			.setDesc("From your account on the web. Leave empty if you don't use Cymose Web — everything else works without it.")
+			.addText((text) => {
+				text.inputEl.type = "password";
+				text
+					.setPlaceholder("eyJ…")
+					.setValue(this.plugin.settings.cymoseToken)
+					.onChange(async (value) => {
+						this.plugin.settings.cymoseToken = value.trim();
+						await this.plugin.saveSettings();
+					});
+			});
+
+		new Setting(containerEl)
+			.setName("Cymose API address")
+			.setDesc("Only change this if you are pointing at your own deployment.")
+			.addText((text) =>
+				text
+					.setPlaceholder(DEFAULT_SETTINGS.cymoseApiUrl)
+					.setValue(this.plugin.settings.cymoseApiUrl)
+					.onChange(async (value) => {
+						this.plugin.settings.cymoseApiUrl = value.trim() || DEFAULT_SETTINGS.cymoseApiUrl;
 						await this.plugin.saveSettings();
 					}),
 			);
