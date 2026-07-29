@@ -3,7 +3,7 @@
 	"name": "Cymose",
 	"version": "0.1.0",
 	"minAppVersion": "1.5.0",
-	"description": "0.1 beta. Branch an AI conversation across a real Obsidian canvas instead of one linear chat. Bring your own OpenRouter key.",
+	"description": "Branch an AI conversation across a real canvas instead of one linear chat. Every message is a node in a .canvas file in your vault. Bring your own OpenRouter key.",
 	"author": "Cymose",
 	"authorUrl": "https://cymose.dev/obsidian",
 	"isDesktopOnly": false

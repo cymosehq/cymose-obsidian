@@ -96,7 +96,10 @@ export class CymoseView extends ItemView {
 		this.prompt = promptRow.createEl("textarea", { cls: "cymose-prompt" });
 		this.prompt.rows = 6;
 		this.prompt.placeholder = "Ask something. It becomes a node under the one you picked.";
-		this.prompt.addEventListener("keydown", (event) => {
+		// registerDomEvent, not addEventListener: Obsidian unregisters it with the
+		// view. Relying on the element being torn down works today and is the
+		// first thing a plugin reviewer asks about.
+		this.registerDomEvent(this.prompt, "keydown", (event) => {
 			// Enter sends, shift+enter breaks the line — the convention every
 			// chat box in the world uses, and the one people try first.
 			if (event.key === "Enter" && !event.shiftKey) {

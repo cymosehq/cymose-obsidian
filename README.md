@@ -163,14 +163,16 @@ three installs as nothing.
    (they are) and must be public.
 2. Cut a release whose tag equals `manifest.json`'s version, with those three
    files attached — the workflow above does exactly this.
-3. Fork [obsidianmd/obsidian-releases](https://github.com/obsidianmd/obsidian-releases),
-   add an entry to `community-plugins.json` with the plugin `id`, `name`,
-   `author`, `description` and `repo` (`cymosehq/cymose-obsidian`), and open a
-   pull request.
+3. Sign in at [community.obsidian.md](https://community.obsidian.md), link the
+   GitHub account, then **Plugins → New plugin** and give it this repository's
+   URL. (The old route was a pull request against `obsidian-releases`; it is a
+   form now.)
 4. A bot checks the manifest and the release; a human reviews after it passes.
-   Expect changes to be requested — the common ones are the plugin id, using
-   `innerHTML`, and touching files outside the vault. This plugin does none of
-   those, but the review is real and it takes weeks, not days.
+   Expect changes to be requested — the usual ones are the global `app` object,
+   `innerHTML`, listeners that aren't cleaned up on unload, and hardcoded
+   styles. This plugin uses `this.app`, builds DOM with `createEl`, registers
+   every listener through Obsidian, and styles from CSS classes — but the
+   review is real and takes weeks, not days.
 
 ## Contributing
 
