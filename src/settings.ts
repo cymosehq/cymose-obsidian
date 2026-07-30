@@ -63,13 +63,47 @@ export class CymoseSettingTab extends PluginSettingTab {
 		const notice = containerEl.createDiv({ cls: "cymose-notice" });
 		notice.createEl("p", {
 			text:
-				"0.1 beta. Cymose runs on your own OpenRouter key — there is no Cymose account, " +
-				"no server of ours in the path, and no telemetry. You pay OpenRouter directly.",
+				"0.1 beta. Sign in with a Cymose account and it works on the free tier, with the " +
+				"same allowance as the web app; a plan raises it. Bringing your own OpenRouter key " +
+				"instead is supported and spends your provider credit rather than Cymose credits.",
 		});
 		notice.createEl("p", {
 			text:
-				"Conversations are saved as ordinary Obsidian canvas files in your vault. " +
-				"They keep working if you uninstall this plugin.",
+				"Conversations are saved as ordinary Obsidian canvas files in your vault, and nothing " +
+				"is stored on our side: a turn is answered and forgotten. They keep working if you " +
+				"uninstall this plugin.",
+		});
+
+		containerEl.createEl("h3", { text: "Cymose account" });
+
+		new Setting(containerEl)
+			.setName("Cymose token")
+			.setDesc(
+				createFragment((frag) => {
+					frag.appendText("From your account page at ");
+					frag.createEl("a", { href: "https://cymose.dev", text: "cymose.dev" });
+					frag.appendText(
+						". The free tier works without paying; a plan raises the limits. This also lets you pull a tree you planned on the web onto a canvas here.",
+					);
+				}),
+			)
+			.addText((text) => {
+				text.inputEl.type = "password";
+				text
+					.setPlaceholder("eyJ…")
+					.setValue(this.plugin.settings.cymoseToken)
+					.onChange(async (value) => {
+						this.plugin.settings.cymoseToken = value.trim();
+						await this.plugin.saveSettings();
+					});
+			});
+
+		containerEl.createEl("h3", { text: "Or bring your own key" });
+		containerEl.createEl("p", {
+			cls: "cymose-notice",
+			text:
+				"Set a key here and turns go straight to OpenRouter on your account instead of spending " +
+				"Cymose credits. Leave it empty to use your Cymose account.",
 		});
 
 		new Setting(containerEl)
@@ -157,27 +191,7 @@ export class CymoseSettingTab extends PluginSettingTab {
 					}),
 			);
 
-		containerEl.createEl("h3", { text: "Cymose Web (optional)" });
-		const syncNote = containerEl.createDiv({ cls: "cymose-notice" });
-		syncNote.createEl("p", {
-			text:
-				"If you also use Cymose on the web, you can pull a tree you planned there onto a canvas here. " +
-				"Reading only — nothing in your vault is uploaded, and turns still go straight to OpenRouter on your own key.",
-		});
-
-		new Setting(containerEl)
-			.setName("Cymose access token")
-			.setDesc("From your account on the web. Leave empty if you don't use Cymose Web — everything else works without it.")
-			.addText((text) => {
-				text.inputEl.type = "password";
-				text
-					.setPlaceholder("eyJ…")
-					.setValue(this.plugin.settings.cymoseToken)
-					.onChange(async (value) => {
-						this.plugin.settings.cymoseToken = value.trim();
-						await this.plugin.saveSettings();
-					});
-			});
+		containerEl.createEl("h3", { text: "Advanced" });
 
 		new Setting(containerEl)
 			.setName("Cymose API address")

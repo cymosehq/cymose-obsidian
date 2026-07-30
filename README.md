@@ -12,16 +12,21 @@ single line.
 
 - **This is a 0.1 beta.** The loop below works end to end. Most of the concept
   does not exist yet — see [What's not here](#whats-not-here).
-- **Bring your own key.** It runs on your own [OpenRouter](https://openrouter.ai)
-  key: one key, every model (Claude, GPT, Gemini, DeepSeek, Qwen, Kimi, GLM…).
-  There is no Cymose account, no server of ours in the path of a message, and
-  no telemetry. You pay OpenRouter directly at their rates.
-- **Cymose Web integration reads only.** If you also use Cymose on the web, you
-  can pull a tree you planned there onto a canvas here (see [Pull a tree from
-  the web](#pull-a-tree-from-the-web)). It is optional, off until you paste a
-  token, and one-directional: nothing in your vault is uploaded, and turns
-  still go straight to OpenRouter on your own key. Writing back is a later
-  milestone.
+- **Sign in and it works.** A Cymose account on the free tier gets the same
+  allowance as the web app; a plan raises it. One account, one bill, the same
+  credits whether you're on a canvas in a browser or a canvas in your vault.
+- **Bringing your own key is the second path, not the first.** Paste an
+  [OpenRouter](https://openrouter.ai) key instead and turns go straight to
+  OpenRouter on your account, spending your provider credit rather than Cymose
+  credits. Both work; the key wins if both are set, so nobody who set one up
+  before this existed is signed out or asked anything.
+- **Nothing is stored on our side.** A turn is answered and forgotten: no
+  workspace, no saved messages, nothing to go and delete later. The
+  conversation lives in your vault.
+- **Cymose Web sync reads only.** The same account also lets you pull a tree
+  you planned in the browser onto a canvas here (see [Pull a tree from the
+  web](#pull-a-tree-from-the-web)). One-directional: nothing in your vault is
+  uploaded. Writing back is a later milestone.
 
 ## This code was written by an AI
 
@@ -68,7 +73,8 @@ That one decision buys most of the product:
 
 ## Use it
 
-1. Settings → Cymose → paste your OpenRouter key.
+1. Settings → Cymose → paste your Cymose token. (Or an OpenRouter key, if you
+   would rather spend that.)
 2. Command palette → **Cymose: New conversation** (or **Start a conversation
    about this note**, which embeds the note in the first node so the canvas
    stays linked in your graph).
@@ -103,6 +109,7 @@ The concept this is built from includes a lot more. Honest state of it:
 |---|---|
 | Canvas conversations, branching, context inheritance | **works** |
 | Streaming answers | **works** |
+| Cymose account, free tier or a plan | **works** |
 | Any OpenRouter model, per-vault settings | **works** |
 | Start a conversation from a note | **works** |
 | Explore 3 ways (one click → three strategies) | not yet |
@@ -138,7 +145,7 @@ mkdir -p /path/to/vault/.obsidian/plugins/cymose
 mv main.js manifest.json styles.css /path/to/vault/.obsidian/plugins/cymose/
 ```
 
-Then enable it in Settings → Community plugins, and paste an OpenRouter key in
+Then enable it in Settings → Community plugins, and paste your Cymose token in
 Settings → Cymose.
 
 ## Releasing

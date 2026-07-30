@@ -203,8 +203,9 @@ export class CymoseView extends ItemView {
 			await this.plugin.newConversation();
 			if (!this.file) return;
 		}
-		if (!this.plugin.settings.apiKey.trim()) {
-			new Notice("Cymose: add your OpenRouter key in settings first.");
+		if (this.plugin.needsSetup()) {
+			// Names the path we want people on, and doesn't hide the other one.
+			new Notice("Cymose: sign in to Cymose in settings — or add your own OpenRouter key.");
 			return;
 		}
 

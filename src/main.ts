@@ -1,5 +1,6 @@
 import { FuzzySuggestModal, Notice, Plugin, TFile, WorkspaceLeaf } from "obsidian";
 import { CymoseSettingTab, CymoseSettings, DEFAULT_SETTINGS } from "./settings";
+import { CymoseAdapter } from "./providers/cymose";
 import { OpenRouterAdapter } from "./providers/openrouter";
 import type { ModelAdapter } from "./providers/types";
 import { CymoseView, VIEW_TYPE } from "./view";
@@ -65,10 +66,28 @@ export default class CymosePlugin extends Plugin {
 		// Leaves are Obsidian's to clean up; nothing of ours outlives the app.
 	}
 
+	/**
+	 * Which provider answers this turn.
+	 *
+	 * Cymose first: it is the path that needs nothing but signing in, and its
+	 * free tier has the same allowance as the web app. A provider key is the
+	 * fallback for people who already have one and would rather spend it —
+	 * which also means someone who set a key up before this existed keeps
+	 * working exactly as they did, without being signed out or asked anything.
+	 *
+	 * Rebuilt per call rather than cached: either credential can change in
+	 * settings between turns, and a cached adapter would keep the old one.
+	 */
 	adapter(): ModelAdapter {
-		// Rebuilt per call rather than cached: the key can change in settings
-		// between turns, and a cached adapter would keep using the old one.
+		if (this.settings.cymoseToken.trim()) {
+			return new CymoseAdapter(this.settings.cymoseApiUrl, this.settings.cymoseToken);
+		}
 		return new OpenRouterAdapter(this.settings.apiKey);
+	}
+
+	/** True when neither path is configured — the one state that can't answer. */
+	needsSetup(): boolean {
+		return !this.settings.cymoseToken.trim() && !this.settings.apiKey.trim();
 	}
 
 	async saveSettings(): Promise<void> {
