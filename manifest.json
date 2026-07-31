@@ -1,9 +1,9 @@
 {
 	"id": "cymose",
 	"name": "Cymose",
-	"version": "0.1.0",
+	"version": "0.2.0",
 	"minAppVersion": "1.5.0",
-	"description": "Branch an AI conversation across a real canvas instead of one linear chat. Every message is a node in a .canvas file in your vault. Free tier with a Cymose account, or bring your own OpenRouter key.",
+	"description": "Branch an AI conversation across a real canvas instead of one linear chat. Ask a question three ways at once, then promote what held up so later branches inherit it. Every message is a node in a .canvas file in your vault.",
 	"author": "Cymose",
 	"authorUrl": "https://cymose.dev/obsidian",
 	"isDesktopOnly": false
