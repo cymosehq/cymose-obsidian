@@ -1,6 +1,14 @@
 import { App, PluginSettingTab, Setting } from "obsidian";
 import type CymosePlugin from "./main";
 import type { SyncMap } from "./sync";
+import {
+	FALLBACK_MODEL_IDS,
+	fetchCatalogue,
+	groupByTier,
+	describe,
+	isCymoseHostedModel,
+	type CatalogueEntry,
+} from "./models";
 
 export interface CymoseSettings {
 	/** OpenRouter key. Lives in this vault's plugin data, never leaves it
@@ -19,14 +27,29 @@ export interface CymoseSettings {
 	cymoseToken: string;
 	/** Which canvas node mirrors which Cymose node, per canvas path. See sync.ts. */
 	syncMap: SyncMap;
+	/** Last catalogue read from GET /v1/models. Empty until one is fetched. */
+	modelCatalogue: CatalogueEntry[];
+	/** When it was read, so the tab doesn't ask on every open. */
+	modelCatalogueAt: number;
 }
 
-// A sensible default that is cheap, fast and good enough to judge the plugin
-// by. Anyone who wants Opus can paste an id; anyone who wants to try the
-// plugin should not have to choose a model first.
+/** How long a cached catalogue is trusted. The lineup changes in weeks. */
+const CATALOGUE_TTL_MS = 24 * 60 * 60 * 1000;
+
+// The default costs no credits.
+//
+// It used to be Claude Haiku, which is a metered model — so a new user signed
+// in, pressed "Explore 3 ways", and three metered turns came out of an
+// allowance they had not been told they were spending. On the web the free
+// Cloudflare models are what the picker leads with and what a free account
+// actually runs on; there was no reason for the plugin to disagree, and every
+// reason not to, since the first five minutes decide whether there is a sixth.
+//
+// Anyone who wants Sonnet can pick it in two clicks. Nobody should have to
+// choose a model, or read a price list, before their first question.
 export const DEFAULT_SETTINGS: CymoseSettings = {
 	apiKey: "",
-	model: "anthropic/claude-haiku-4.5",
+	model: "@cf/openai/gpt-oss-120b",
 	temperature: 0.7,
 	maxTokens: 2048,
 	folder: "Cymose",
@@ -35,18 +58,9 @@ export const DEFAULT_SETTINGS: CymoseSettings = {
 	cymoseApiUrl: "https://api.cymose.cloud",
 	cymoseToken: "",
 	syncMap: {},
+	modelCatalogue: [],
+	modelCatalogueAt: 0,
 };
-
-// Suggestions, not a whitelist — the field stays free text so a model released
-// tomorrow works today without a plugin update.
-const SUGGESTED_MODELS = [
-	"anthropic/claude-haiku-4.5",
-	"anthropic/claude-sonnet-5",
-	"openai/gpt-5.6-luna",
-	"google/gemini-3.1-flash-lite",
-	"deepseek/deepseek-v4-flash",
-	"qwen/qwen3-max",
-];
 
 export class CymoseSettingTab extends PluginSettingTab {
 	constructor(
@@ -127,29 +141,7 @@ export class CymoseSettingTab extends PluginSettingTab {
 					});
 			});
 
-		new Setting(containerEl)
-			.setName("Model")
-			.setDesc("Any OpenRouter model id. Free text, so a model released tomorrow works today.")
-			.addText((text) =>
-				text
-					.setPlaceholder(DEFAULT_SETTINGS.model)
-					.setValue(this.plugin.settings.model)
-					.onChange(async (value) => {
-						this.plugin.settings.model = value.trim() || DEFAULT_SETTINGS.model;
-						await this.plugin.saveSettings();
-					}),
-			)
-			.addDropdown((drop) => {
-				drop.addOption("", "Suggestions…");
-				for (const id of SUGGESTED_MODELS) drop.addOption(id, id);
-				drop.setValue("");
-				drop.onChange(async (value) => {
-					if (!value) return;
-					this.plugin.settings.model = value;
-					await this.plugin.saveSettings();
-					this.display();
-				});
-			});
+		this.modelSetting(containerEl);
 
 		new Setting(containerEl)
 			.setName("Temperature")
@@ -219,5 +211,104 @@ export class CymoseSettingTab extends PluginSettingTab {
 						await this.plugin.saveSettings();
 					});
 			});
+
+		// Kicked off after the tab is drawn, not before: a slow network should
+		// delay the catalogue, never the settings screen. It re-renders if it
+		// finds something new.
+		void this.refreshCatalogue();
+	}
+
+	/**
+	 * Which model answers, and what it will take out of your allowance.
+	 *
+	 * The costs come from the server, never from this repository — see models.ts
+	 * for why. When there is no catalogue to show (own key, or a first run
+	 * offline) the dropdown falls back to bare ids, which is exactly what this
+	 * setting offered before and no worse than it was.
+	 */
+	private modelSetting(containerEl: HTMLElement): void {
+		const { model, modelCatalogue, cymoseToken, apiKey } = this.plugin.settings;
+		const usingOwnKey = !cymoseToken.trim() && Boolean(apiKey.trim());
+		// A catalogue is only meaningful for turns Cymose is billing. On somebody
+		// else's key the tiers are ours and the bill is OpenRouter's, so showing
+		// our credit weights there would be describing a charge that never happens.
+		const catalogue = usingOwnKey ? [] : modelCatalogue;
+
+		const setting = new Setting(containerEl)
+			.setName("Model")
+			.setDesc(
+				catalogue.length
+					? "Free models cost no credits, on any plan. Free text as well, so a model released tomorrow works today."
+					: "Any model id. Free text, so a model released tomorrow works today.",
+			)
+			.addText((text) =>
+				text
+					.setPlaceholder(DEFAULT_SETTINGS.model)
+					.setValue(model)
+					.onChange(async (value) => {
+						this.plugin.settings.model = value.trim() || DEFAULT_SETTINGS.model;
+						await this.plugin.saveSettings();
+					}),
+			)
+			.addDropdown((drop) => {
+				drop.addOption("", catalogue.length ? "Pick a model…" : "Suggestions…");
+
+				if (catalogue.length) {
+					// Obsidian's dropdown has no group API, so the optgroups are
+					// built on its select directly. Worth it: three tiers in one
+					// flat list is a wall of names with numbers after them.
+					for (const group of groupByTier(catalogue)) {
+						const optgroup = drop.selectEl.createEl("optgroup");
+						optgroup.label = group.label;
+						for (const entry of group.models) {
+							optgroup.createEl("option", { value: entry.id, text: describe(entry) });
+						}
+					}
+				} else {
+					for (const id of FALLBACK_MODEL_IDS) drop.addOption(id, id);
+				}
+
+				drop.setValue("");
+				drop.onChange(async (value) => {
+					if (!value) return;
+					this.plugin.settings.model = value;
+					await this.plugin.saveSettings();
+					this.display();
+				});
+			});
+
+		// The one combination that fails outright, said here rather than after a
+		// turn is refused: Cymose's free models run on Cloudflare's binding, and
+		// OpenRouter has never heard of them.
+		if (usingOwnKey && isCymoseHostedModel(model)) {
+			setting.descEl.createEl("p", {
+				cls: "cymose-warning",
+				text: `“${model}” is a Cymose-hosted model and OpenRouter can't answer it. Pick one from the list, or sign in to Cymose above.`,
+			});
+		}
+	}
+
+	/**
+	 * Reads the lineup from the API, at most once a day.
+	 *
+	 * Failure is silent on purpose. This decorates a picker that already works
+	 * without it, and somebody who opened settings to paste a token should not
+	 * be met with an error about a list they had not asked for.
+	 */
+	private async refreshCatalogue(): Promise<void> {
+		const { cymoseToken, cymoseApiUrl, modelCatalogueAt, modelCatalogue } = this.plugin.settings;
+		if (!cymoseToken.trim()) return;
+		if (modelCatalogue.length && Date.now() - modelCatalogueAt < CATALOGUE_TTL_MS) return;
+
+		try {
+			const models = await fetchCatalogue(cymoseApiUrl, cymoseToken);
+			this.plugin.settings.modelCatalogue = models;
+			this.plugin.settings.modelCatalogueAt = Date.now();
+			await this.plugin.saveSettings();
+			// Guard against redrawing a tab the user has already closed.
+			if (this.containerEl.isConnected) this.display();
+		} catch {
+			// Keep whatever was cached, and the fallback ids if there is nothing.
+		}
 	}
 }

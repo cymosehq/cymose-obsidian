@@ -1,4 +1,5 @@
 import { ModelAdapter, Message, ModelOptions, ProviderError } from "./types";
+import { isCymoseHostedModel } from "../models";
 
 // OpenRouter: one key, every model.
 //
@@ -21,6 +22,18 @@ export class OpenRouterAdapter implements ModelAdapter {
 	async *chat(messages: Message[], options: ModelOptions): AsyncGenerator<string> {
 		if (!this.apiKey.trim()) {
 			throw new ProviderError(401, "No OpenRouter key set. Add one in Cymose settings.");
+		}
+		// The default model is one of Cymose's free ones, which run on
+		// Cloudflare's binding and do not exist at OpenRouter. Left alone this
+		// reaches them as an unknown id and comes back as a 400 naming a model
+		// the user never typed. Say it here instead — and say it rather than
+		// silently substituting something, because quietly answering on a model
+		// nobody chose is how a bill becomes a surprise.
+		if (isCymoseHostedModel(options.model)) {
+			throw new ProviderError(
+				400,
+				`“${options.model}” is a Cymose-hosted model and OpenRouter can't answer it. Pick an OpenRouter model in Cymose settings.`,
+			);
 		}
 
 		const response = await fetch(ENDPOINT, {

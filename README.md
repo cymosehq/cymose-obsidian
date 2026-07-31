@@ -13,6 +13,8 @@ single line.
 - **Sign in and it works.** A Cymose account on the free tier gets the same
   allowance as the web app; a plan raises it. One account, one bill, the same
   credits whether you're on a canvas in a browser or a canvas in your vault.
+  Nothing here is behind a plan — paying raises limits and unlocks the stronger
+  models, it doesn't unlock features. The default model costs no credits at all.
 - **Bringing your own key is the second path, not the first.** Paste an
   [OpenRouter](https://openrouter.ai) key instead and turns go straight to
   OpenRouter on your account, spending your provider credit rather than Cymose
@@ -149,14 +151,32 @@ deleted on the web are left alone: this is a mirror, not a replica, and
 deleting something out of your vault because a server stopped mentioning it is
 not a trade worth making.
 
-## What a branch costs
+## Which model, and what it costs
 
-Worth knowing before you run up a bill: a turn is sent with the whole chain
-above it, so the fortieth turn on one line costs a great deal more than the
-first. Promote is the lever. Once a branch is promoted, a *new* branch opened at
-the fork point inherits five lines of conclusion instead of forty turns of
-transcript — cheaper per turn, and usually the better conversation, because the
-model is reading what you decided rather than everything you said on the way.
+Settings → Cymose → **Model**. Signed in, the dropdown is the live lineup read
+from your account, grouped into three tiers with what each turn costs beside it:
+free models that spend nothing on any plan, and two metered tiers above them.
+The list comes from the server, so a model added next month is offered without a
+plugin update, and this repository carries no price list to fall out of date.
+
+**The default is a free model**, and the free tier is a real one — the same
+models the web app leads with. You can use this plugin, including branching and
+Explore 3 ways, without spending anything.
+
+Two things worth knowing before you pick a metered model:
+
+- **A turn is a turn.** On a Cymose account the cost is per turn and flat: it
+  does not grow with the length of the branch, so the fortieth turn on one line
+  costs exactly what the first did. What multiplies is the number of turns —
+  **Explore 3 ways is three of them**, and Promote is one more.
+- **On your own OpenRouter key it is per token**, because that is how OpenRouter
+  bills. There a long branch genuinely does cost more each turn, and promoting
+  then branching afresh at the fork point is a real saving as well as a better
+  conversation.
+
+Promote is worth doing either way: a branch opened at the fork point inherits
+five lines of conclusion instead of forty turns of transcript, and the model
+answers against what you decided rather than everything you said getting there.
 
 Anything missing or broken, [open an
 issue](https://github.com/cymosehq/cymose-obsidian/issues).

@@ -69,3 +69,10 @@
 
 .cymose-notice p { margin: 0 0 6px; }
 .cymose-notice p:last-child { margin-bottom: 0; }
+
+/* A setting that is currently misconfigured, said next to the control that
+   fixes it. Obsidian's own error colour, so it follows the theme. */
+.cymose-warning {
+	margin: 6px 0 0;
+	color: var(--text-error);
+}
