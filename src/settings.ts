@@ -63,15 +63,16 @@ export class CymoseSettingTab extends PluginSettingTab {
 		const notice = containerEl.createDiv({ cls: "cymose-notice" });
 		notice.createEl("p", {
 			text:
-				"0.1 beta. Sign in with a Cymose account and it works on the free tier, with the " +
+				"Sign in with a Cymose account and it works on the free tier, with the " +
 				"same allowance as the web app; a plan raises it. Bringing your own OpenRouter key " +
 				"instead is supported and spends your provider credit rather than Cymose credits.",
 		});
 		notice.createEl("p", {
 			text:
-				"Conversations are saved as ordinary Obsidian canvas files in your vault, and nothing " +
-				"is stored on our side: a turn is answered and forgotten. They keep working if you " +
-				"uninstall this plugin.",
+				"Conversations are saved as ordinary Obsidian canvas files in your vault, and keep " +
+				"working if you uninstall this plugin. A turn is sent to whichever service you " +
+				"configured below — Cymose, or OpenRouter on your own key — and neither one keeps a " +
+				"copy of it: Cymose answers the request and stores nothing but the credits it cost.",
 		});
 
 		containerEl.createEl("h3", { text: "Cymose account" });

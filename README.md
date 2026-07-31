@@ -8,10 +8,8 @@ able to find the two that didn't — and why. Every other AI plugin for Obsidian
 gives you a chat box in the sidebar; the conversations worth having aren't a
 single line.
 
-## 0.1 beta — read this first
+## Getting started
 
-- **This is a 0.1 beta.** The loop below works end to end. Most of the concept
-  does not exist yet — see [What's not here](#whats-not-here).
 - **Sign in and it works.** A Cymose account on the free tier gets the same
   allowance as the web app; a plan raises it. One account, one bill, the same
   credits whether you're on a canvas in a browser or a canvas in your vault.
@@ -20,32 +18,44 @@ single line.
   OpenRouter on your account, spending your provider credit rather than Cymose
   credits. Both work; the key wins if both are set, so nobody who set one up
   before this existed is signed out or asked anything.
-- **Nothing is stored on our side.** A turn is answered and forgotten: no
-  workspace, no saved messages, nothing to go and delete later. The
-  conversation lives in your vault.
 - **Cymose Web sync reads only.** The same account also lets you pull a tree
   you planned in the browser onto a canvas here (see [Pull a tree from the
   web](#pull-a-tree-from-the-web)). One-directional: nothing in your vault is
   uploaded. Writing back is a later milestone.
 
-## This code was written by an AI
+## What this plugin can do to you
+
+The short version, because you are about to give a plugin a credential and let
+it write files in your vault. Every line of it is checkable against the source,
+which is eight files and under 2000 lines, comments included.
+
+- **What it writes:** `.canvas` files in your conversations folder, and its own
+  settings. It never modifies a note. Pinning a note reads it; the embed goes
+  into the canvas, not into the note.
+- **Where a turn goes:** to Cymose if you signed in, or to OpenRouter if you
+  set a key. One of the two, never both, and nowhere else. No analytics, no
+  telemetry, no third host.
+- **What is kept:** not the conversation. Turns are sent with `ephemeral` set,
+  which means the API answers them and stores no workspace and no messages —
+  what it records is that a turn happened, because that is what bills your
+  credits. On an OpenRouter key we are not in the path at all and OpenRouter's
+  retention policy is the one that applies.
+- **What survives us:** everything. A conversation is a JSON Canvas file in
+  your vault, in Obsidian's own format. Uninstall the plugin and the
+  conversations are still there and still readable.
+
+### Written by an AI
 
 Every line in this repository was written by an AI coding agent (Claude, via
 Claude Code) working from my direction. I decide what gets built, review it at
-the level of behaviour, and test it. I do not hand-write the code — I am not a
-programmer.
+the level of behaviour, and test it. I do not hand-write the code.
 
-Stated up front because you're about to give a plugin your API key and let it
-write files in your vault:
-
-- **Read it before you trust it.** There is no experienced human author who
-  checked every line. It is a small codebase and deliberately readable.
-- **What it writes:** `.canvas` files in your conversations folder, and its own
-  settings. Nothing else in your vault is touched.
-- **What it sends:** your messages and the branch above them, to OpenRouter,
-  on your key. Nowhere else.
-- **Bugs are my responsibility, not the model's.** Report them and they get
-  fixed.
+Say what you like about that; the guarantees above are the same either way,
+because they are properties of what the code does and not of who typed it. The
+one honest objection is whether someone who did not write the code can fix it.
+The answer is response time: [open an
+issue](https://github.com/cymosehq/cymose-obsidian/issues) and see. Bugs are my
+responsibility, not the model's.
 
 ## How it works
 
@@ -83,6 +93,44 @@ That one decision buys most of the product:
 4. To branch: change **Branch from** to any earlier node and ask something
    else. The new line inherits that node's history, not its siblings'.
 
+### Explore 3 ways
+
+Type a question and press **Explore 3 ways** instead of Send. It asks three
+times with three different instructions — the straight answer, one that
+questions an assumption in the question, and one that goes for the option with
+the higher ceiling — and hangs all three under your question as siblings.
+
+Not three samples at a high temperature. That gives three paraphrases of one
+idea, which is worth nothing to compare. Three different instructions give three
+genuinely different answers, side by side, none contaminated by the other two.
+
+### Promote a conclusion
+
+This is the half of branching that nobody else does. Forking is easy and every
+canvas has it; the problem is the way back up. A decision made three levels down
+stays down there, and the next branch you open re-litigates it.
+
+Select the end of a branch in **Branch from** and press **Promote**. The branch
+is compressed into what it settled — what was decided, what was ruled out, why —
+and that lands in the node the branch forked from, as a callout you can edit or
+delete by hand. Every branch you open there afterwards inherits it, because the
+context a turn is sent is already the chain up to the root.
+
+Promoting the same branch again updates its conclusion in place. A different
+branch promoting into the same node is a second conclusion and gets its own
+block.
+
+### Pin a note to a node
+
+Press **Pin a note** and pick one. It goes into the node as an ordinary
+`![[embed]]`, so the canvas shows it inline and your graph view knows about the
+link — and every branch below that node is answered with the note's contents in
+context.
+
+Resolved when the turn is sent, not when you pin it: edit the note and every
+branch below it is answered against the new text, without re-pinning anything.
+Notes are read, never written.
+
 ### Pull a tree from the web
 
 Optional, and only if you also use Cymose on the web.
@@ -101,35 +149,23 @@ deleted on the web are left alone: this is a mirror, not a replica, and
 deleting something out of your vault because a server stopped mentioning it is
 not a trade worth making.
 
-## What's not here
+## What a branch costs
 
-The concept this is built from includes a lot more. Honest state of it:
+Worth knowing before you run up a bill: a turn is sent with the whole chain
+above it, so the fortieth turn on one line costs a great deal more than the
+first. Promote is the lever. Once a branch is promoted, a *new* branch opened at
+the fork point inherits five lines of conclusion instead of forty turns of
+transcript — cheaper per turn, and usually the better conversation, because the
+model is reading what you decided rather than everything you said on the way.
 
-| | |
-|---|---|
-| Canvas conversations, branching, context inheritance | **works** |
-| Streaming answers | **works** |
-| Cymose account, free tier or a plan | **works** |
-| Any OpenRouter model, per-vault settings | **works** |
-| Start a conversation from a note | **works** |
-| Explore 3 ways (one click → three strategies) | not yet |
-| Promote a conclusion back to the parent | not yet |
-| Compare & combine two branches | not yet |
-| Ask-the-whole-tree | not yet |
-| Scheduled nodes (Flows), web search, attachments, voice | not yet |
-| Summarised (rather than full) ancestor context | not yet |
-| Pull a tree from Cymose Web | **works** (read-only) |
-| Push changes back to the web | not yet |
-| Providers other than OpenRouter | not yet — the adapter interface is there |
-
-Long branches send their full history today. That is fine for a dozen turns and
-wasteful after that; compressing ancestors into a summary is the next thing.
+Anything missing or broken, [open an
+issue](https://github.com/cymosehq/cymose-obsidian/issues).
 
 ## Install
 
 **From Obsidian** — Settings → Community plugins → Browse → search **Cymose**.
-Not listed yet; the submission goes in once the loop is worth a stranger's
-time, and this line will be true when it is.
+Not listed yet; the submission goes in with this release, and review takes
+weeks, so the two routes below are the ones that work today.
 
 **Until then, [BRAT](https://github.com/TfTHacker/obsidian42-brat)** is the
 one-step path: install BRAT, run *Add beta plugin*, paste
