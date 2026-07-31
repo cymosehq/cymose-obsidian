@@ -34,8 +34,11 @@
 	font-family: var(--font-text);
 }
 
+/* Wraps, because the right sidebar is narrow by default and a row of buttons
+   that overflows it is a row of buttons you cannot press. */
 .cymose-actions {
 	display: flex;
+	flex-wrap: wrap;
 	gap: 8px;
 }
 

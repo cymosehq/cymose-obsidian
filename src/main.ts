@@ -7,7 +7,7 @@ import { CymoseView, VIEW_TYPE } from "./view";
 import { appendNode, COLOR_USER, createCanvas, readCanvas, writeCanvas } from "./canvas";
 import { fetchTree, mirrorSubtree, roots, subtree, SyncError, type SyncNode } from "./sync";
 
-// Cymose for Obsidian — 0.1 beta.
+// Cymose for Obsidian.
 //
 // Every AI plugin for Obsidian puts a linear chat in a sidebar. The
 // interesting conversations are not linear: you want to ask the same question
@@ -20,9 +20,14 @@ import { fetchTree, mirrorSubtree, roots, subtree, SyncError, type SyncNode } fr
 // which means forking inherits everything above and nothing beside it, with no
 // bookkeeping of ours, because the canvas already knows who a node's parent is.
 //
-// Storage is the vault, in Obsidian's own format. Nothing here talks to a
-// server of ours; turns go straight to the provider on the user's key. If this
-// plugin disappears tomorrow, the conversations are still readable files.
+// Storage is the vault, in Obsidian's own format. If this plugin disappears
+// tomorrow, the conversations are still readable files.
+//
+// Where a turn goes depends on which credential is set: with a Cymose token it
+// goes to the Cymose API, which answers it and does not keep it (`ephemeral`);
+// with an OpenRouter key it goes straight to OpenRouter on that account. Either
+// way the conversation itself lives only in the vault — but "we never see it"
+// is not true of the account path and this file should not imply that it is.
 
 export default class CymosePlugin extends Plugin {
 	settings: CymoseSettings = DEFAULT_SETTINGS;
@@ -49,6 +54,21 @@ export default class CymosePlugin extends Plugin {
 			id: "pull-from-web",
 			name: "Pull a tree from Cymose Web",
 			callback: () => void this.pullFromWeb(),
+		});
+		this.addCommand({
+			id: "explore-3-ways",
+			name: "Explore 3 ways",
+			callback: () => void this.inPanel((view) => view.explore()),
+		});
+		this.addCommand({
+			id: "promote-branch",
+			name: "Promote this branch into the node it forked from",
+			callback: () => void this.inPanel((view) => view.promote()),
+		});
+		this.addCommand({
+			id: "pin-note",
+			name: "Pin a note to the selected node",
+			callback: () => void this.inPanel((view) => view.pinNote()),
 		});
 		this.addCommand({
 			id: "conversation-from-note",
@@ -105,6 +125,23 @@ export default class CymosePlugin extends Plugin {
 		await leaf.setViewState({ type: VIEW_TYPE, active: true });
 		await this.app.workspace.revealLeaf(leaf);
 		return leaf.view as CymoseView;
+	}
+
+	/**
+	 * Runs a panel action from the command palette.
+	 *
+	 * These actions need the panel's state — which node you are branching from,
+	 * what is in the prompt box — so the command opens the panel and asks it,
+	 * rather than keeping a second copy of that state up here that could
+	 * disagree with what the user is looking at.
+	 */
+	private async inPanel(action: (view: CymoseView) => void | Promise<void>): Promise<void> {
+		const panel = await this.openPanel();
+		if (!panel) {
+			new Notice("Cymose: couldn't open the panel.");
+			return;
+		}
+		await action(panel);
 	}
 
 	/** Creates an empty canvas, opens it, and points the panel at it. */

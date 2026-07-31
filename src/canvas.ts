@@ -170,6 +170,85 @@ export function leaves(data: CanvasData): CanvasNode[] {
 	return data.nodes.filter((n) => !hasChild.has(n.id));
 }
 
+/** Direct children of a node, in the order their edges were written. */
+export function childrenOf(data: CanvasData, nodeId: string): CanvasNode[] {
+	const byId = new Map(data.nodes.map((n) => [n.id, n]));
+	return data.edges
+		.filter((e) => e.fromNode === nodeId)
+		.map((e) => byId.get(e.toNode))
+		.filter((n): n is CanvasNode => Boolean(n));
+}
+
+/**
+ * Where the branch containing `nodeId` split off.
+ *
+ * The nearest ancestor with more than one child — the node where someone asked
+ * the same thing two ways. That is the node a conclusion has to land on, because
+ * it is the one every *future* branch will also hang from.
+ *
+ * A conversation with no fork yet answers with its root, which is the reading
+ * that makes promote useful before you have branched at all: the root is where
+ * you will start the next line from.
+ */
+export function forkPoint(data: CanvasData, nodeId: string): CanvasNode | null {
+	const chain = ancestry(data, nodeId);
+	// Excludes the node itself: promoting a branch into its own tip says nothing.
+	for (let i = chain.length - 2; i >= 0; i -= 1) {
+		if (childrenOf(data, chain[i].id).length > 1) return chain[i];
+	}
+	return chain[0] ?? null;
+}
+
+/** The nodes below `ancestorId` on the way down to `tipId`, oldest first. */
+export function branchSince(data: CanvasData, ancestorId: string, tipId: string): CanvasNode[] {
+	const chain = ancestry(data, tipId);
+	const index = chain.findIndex((n) => n.id === ancestorId);
+	return index === -1 ? chain : chain.slice(index + 1);
+}
+
+// A promoted conclusion is stored in the text of the node it was promoted to,
+// wrapped in HTML comments.
+//
+// Storing it in the node's own text is what makes inheritance free: the context
+// a turn is sent is already the chain up to the root, so a conclusion written
+// into an ancestor is read by every branch opened under it afterwards, with no
+// second mechanism and nothing for a hand-edited canvas to get out of step with.
+// Obsidian renders HTML comments as nothing and a callout as a callout, so what
+// the user sees on the canvas is a tidy block they can edit or delete by hand.
+const PROMOTED_CLOSE = "<!-- /cymose:promoted -->";
+
+function escapeRegExp(text: string): string {
+	return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** Strips our bookkeeping comments. What the model reads is what a person reads. */
+export function textForModel(text: string): string {
+	return text.replace(/<!--\s*\/?cymose:[^>]*-->[ \t]*\n?/g, "").trim();
+}
+
+/**
+ * Writes a branch's conclusion into `node`, replacing the previous conclusion
+ * from that same branch rather than stacking a second copy under it.
+ *
+ * Keyed by the branch's tip: promoting the same branch again after three more
+ * turns should update what it decided, while a *different* branch promoting into
+ * the same node is a second conclusion and gets its own block.
+ */
+export function setPromoted(node: CanvasNode, branchId: string, title: string, digest: string): void {
+	const open = `<!-- cymose:promoted:${branchId} -->`;
+	const quoted = digest
+		.trim()
+		.split("\n")
+		.map((line) => `> ${line}`)
+		.join("\n");
+	const block = `${open}\n> [!success] Promoted from “${title}”\n${quoted}\n${PROMOTED_CLOSE}`;
+
+	const text = node.text ?? "";
+	const existing = new RegExp(`${escapeRegExp(open)}[\\s\\S]*?${escapeRegExp(PROMOTED_CLOSE)}`);
+	node.text = existing.test(text) ? text.replace(existing, block) : `${text.trimEnd()}\n\n${block}`.trim();
+	node.height = estimateHeight(node.text);
+}
+
 /** A short label for a node, for pickers and menus. */
 export function label(node: CanvasNode, max = 60): string {
 	const text = (node.text ?? "").replace(/\s+/g, " ").trim();
