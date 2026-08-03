@@ -1,4 +1,4 @@
-import { FuzzySuggestModal, Notice, Plugin, TFile, WorkspaceLeaf } from "obsidian";
+import { FuzzySuggestModal, Notice, Plugin, requestUrl, TFile, WorkspaceLeaf } from "obsidian";
 import { CymoseSettingTab, CymoseSettings, DEFAULT_SETTINGS } from "./settings";
 import { CymoseAdapter } from "./providers/cymose";
 import { OpenRouterAdapter } from "./providers/openrouter";
@@ -108,6 +108,63 @@ export default class CymosePlugin extends Plugin {
 	/** True when neither path is configured — the one state that can't answer. */
 	needsSetup(): boolean {
 		return !this.settings.cymoseToken.trim() && !this.settings.apiKey.trim();
+	}
+
+	/**
+	 * Does this token work, and what does it get you?
+	 *
+	 * Answered here rather than by the first failed turn. A rejected credential
+	 * surfaces as a provider error somewhere inside a stream, which reads as a
+	 * broken model — so the setting people go back and change is the model, and
+	 * the plugin keeps not working for a reason it already knew.
+	 *
+	 * /v1/credits is the right question to ask: it is authenticated, it costs
+	 * nothing, and its answer is the other thing somebody setting this up wants
+	 * to know.
+	 */
+	async testConnection(): Promise<{ ok: boolean; message: string }> {
+		const token = this.settings.cymoseToken.trim();
+		if (!token) {
+			return { ok: false, message: "No token yet. Follow the four steps above, then paste it in." };
+		}
+		// Caught before the round trip, because the mistake it catches is the
+		// most likely one: pasting the old kind of credential, or half of one.
+		if (!token.startsWith("cym_")) {
+			return {
+				ok: false,
+				message:
+					"That doesn't look like a Cymose token — they start with “cym_”. If you copied a long string beginning “eyJ”, that's a browser session and it expires within the hour. Create a proper token in Settings → Connected apps.",
+			};
+		}
+
+		const base = this.settings.cymoseApiUrl.trim().replace(/\/+$/, "");
+		let response;
+		try {
+			// requestUrl, not fetch: Obsidian's helper isn't subject to the
+			// renderer's CORS rules. Same reason models.ts and sync.ts use it.
+			response = await requestUrl({
+				url: `${base}/v1/credits`,
+				method: "GET",
+				headers: { Authorization: `Bearer ${token}` },
+				throw: false,
+			});
+		} catch (error) {
+			return { ok: false, message: `Couldn't reach ${base} — ${(error as Error).message}` };
+		}
+
+		if (response.status === 401) {
+			return { ok: false, message: "Cymose rejected that token. It may have been revoked — create a new one." };
+		}
+		if (response.status === 503) {
+			return { ok: false, message: "This Cymose deployment doesn't have API tokens turned on yet." };
+		}
+		if (response.status >= 400) {
+			return { ok: false, message: `Cymose answered ${response.status}.` };
+		}
+
+		const body = response.json as { plan?: string } | null;
+		const plan = body?.plan ? ` You're on the ${body.plan} plan.` : "";
+		return { ok: true, message: `Connected.${plan} Open the panel and ask something.` };
 	}
 
 	async saveSettings(): Promise<void> {

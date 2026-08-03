@@ -76,3 +76,26 @@
 	margin: 6px 0 0;
 	color: var(--text-error);
 }
+
+/* Getting a token, in the order you have to do it. Numbered because the order
+   is load-bearing: the token is shown once, so "copy it" has to happen before
+   "close that page", and a bulleted list would not say so. */
+.cymose-steps {
+	margin: 0 0 16px;
+	padding-left: 22px;
+	color: var(--text-muted);
+	font-size: var(--font-ui-small);
+	line-height: 1.6;
+}
+
+.cymose-steps li { margin-bottom: 3px; }
+
+/* The connection test's answer. */
+.cymose-status {
+	margin: 4px 0 16px;
+	font-size: var(--font-ui-small);
+	color: var(--text-muted);
+}
+
+.cymose-status--ok { color: var(--text-success); }
+.cymose-status--error { color: var(--text-error); }

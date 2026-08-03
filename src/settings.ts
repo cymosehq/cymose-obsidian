@@ -63,6 +63,9 @@ export const DEFAULT_SETTINGS: CymoseSettings = {
 };
 
 export class CymoseSettingTab extends PluginSettingTab {
+	/** Where the connection test writes its answer. Recreated on each display(). */
+	private statusEl: HTMLElement | null = null;
+
 	constructor(
 		app: App,
 		private plugin: CymosePlugin,
@@ -70,14 +73,29 @@ export class CymoseSettingTab extends PluginSettingTab {
 		super(app, plugin);
 	}
 
+	private setStatus(message: string | null, kind: "ok" | "error" | "pending" = "pending"): void {
+		const el = this.statusEl;
+		if (!el) return;
+		if (!message) {
+			el.hide();
+			return;
+		}
+		el.setText(message);
+		el.removeClass("cymose-status--ok");
+		el.removeClass("cymose-status--error");
+		if (kind !== "pending") el.addClass(`cymose-status--${kind}`);
+		el.show();
+	}
+
 	display(): void {
 		const { containerEl } = this;
 		containerEl.empty();
+		this.statusEl = null;
 
 		const notice = containerEl.createDiv({ cls: "cymose-notice" });
 		notice.createEl("p", {
 			text:
-				"Sign in with a Cymose account and it works on the free tier, with the " +
+				"Paste a Cymose token below and it works on the free tier, with the " +
 				"same allowance as the web app; a plan raises it. Bringing your own OpenRouter key " +
 				"instead is supported and spends your provider credit rather than Cymose credits.",
 		});
@@ -91,27 +109,63 @@ export class CymoseSettingTab extends PluginSettingTab {
 
 		containerEl.createEl("h3", { text: "Cymose account" });
 
+		// Where the token comes from, in the order you have to do it.
+		//
+		// The previous wording said "from your account page at cymose.dev". There
+		// was no account page, and the closest thing to a token was the Supabase
+		// session sitting in devtools — which expires in an hour. So the
+		// documented route was impossible, the discoverable one broke before
+		// lunch, and the plugin looked broken to everyone who tried either.
+		const steps = containerEl.createEl("ol", { cls: "cymose-steps" });
+		steps.createEl("li").append(
+			createFragment((frag) => {
+				frag.appendText("Open ");
+				frag.createEl("a", { href: "https://chat.cymose.dev", text: "chat.cymose.dev" });
+				frag.appendText(" and sign in (or create a free account).");
+			}),
+		);
+		steps.createEl("li", { text: "Go to Settings → Connected apps." });
+		steps.createEl("li", { text: "Create a token, name it something like “Obsidian”, and copy it." });
+		steps.createEl("li", { text: "Paste it below. It's shown once, so paste it before closing that page." });
+
 		new Setting(containerEl)
 			.setName("Cymose token")
 			.setDesc(
-				createFragment((frag) => {
-					frag.appendText("From your account page at ");
-					frag.createEl("a", { href: "https://cymose.dev", text: "cymose.dev" });
-					frag.appendText(
-						". The free tier works without paying; a plan raises the limits. This also lets you pull a tree you planned on the web onto a canvas here.",
-					);
-				}),
+				"Starts with cym_. It doesn't expire — it works until you revoke it on that same page.",
 			)
 			.addText((text) => {
 				text.inputEl.type = "password";
 				text
-					.setPlaceholder("eyJ…")
+					.setPlaceholder("cym_…")
 					.setValue(this.plugin.settings.cymoseToken)
 					.onChange(async (value) => {
 						this.plugin.settings.cymoseToken = value.trim();
 						await this.plugin.saveSettings();
+						// Any status shown is about the token that was there a
+						// keystroke ago, and a stale green tick next to a token that
+						// no longer works is worse than no tick.
+						this.setStatus(null);
 					});
 			});
+
+		// "Did that work?" answered here, before the first question is asked.
+		//
+		// Without this the first sign that a token is wrong is a failed turn,
+		// which reports a provider error — so a mistyped credential looks like a
+		// broken model, and the setting people go back to change is the wrong one.
+		new Setting(containerEl)
+			.setName("Check the connection")
+			.setDesc("Asks Cymose who you are and what your allowance is. Costs nothing.")
+			.addButton((button) =>
+				button.setButtonText("Test").onClick(async () => {
+					this.setStatus("Checking…");
+					const result = await this.plugin.testConnection();
+					this.setStatus(result.message, result.ok ? "ok" : "error");
+				}),
+			);
+
+		this.statusEl = containerEl.createEl("p", { cls: "cymose-status" });
+		this.statusEl.hide();
 
 		containerEl.createEl("h3", { text: "Or bring your own key" });
 		containerEl.createEl("p", {

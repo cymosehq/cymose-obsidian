@@ -10,7 +10,9 @@ single line.
 
 ## Getting started
 
-- **Sign in and it works.** A Cymose account on the free tier gets the same
+- **Paste a token and it works.** Create one at
+  [chat.cymose.dev](https://chat.cymose.dev) under Settings → Connected apps.
+  A Cymose account on the free tier gets the same
   allowance as the web app; a plan raises it. One account, one bill, the same
   credits whether you're on a canvas in a browser or a canvas in your vault.
   Nothing here is behind a plan — paying raises limits and unlocks the stronger
@@ -85,8 +87,10 @@ That one decision buys most of the product:
 
 ## Use it
 
-1. Settings → Cymose → paste your Cymose token. (Or an OpenRouter key, if you
-   would rather spend that.)
+1. Get a token: sign in at [chat.cymose.dev](https://chat.cymose.dev), open
+   **Settings → Connected apps**, create one, and copy it — it is shown once.
+   Then Settings → Cymose → paste it, and press **Test** to check it took. (Or
+   paste an OpenRouter key instead, if you would rather spend that.)
 2. Command palette → **Cymose: New conversation** (or **Start a conversation
    about this note**, which embeds the note in the first node so the canvas
    stays linked in your graph).
@@ -137,7 +141,7 @@ Notes are read, never written.
 
 Optional, and only if you also use Cymose on the web.
 
-1. Settings → Cymose → **Cymose access token**, from your account on the web.
+1. Settings → Cymose → **Cymose token** — the same one from "Use it" above.
 2. Command palette → **Cymose: Pull a tree from Cymose Web**, then pick a tree.
 
 It writes a new canvas with the structure of that tree: each node's title, the
