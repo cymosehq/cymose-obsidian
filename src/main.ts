@@ -1,4 +1,4 @@
-import { FuzzySuggestModal, Notice, Plugin, requestUrl, TFile, WorkspaceLeaf } from "obsidian";
+import { App, FuzzySuggestModal, Notice, Plugin, requestUrl, TFile, WorkspaceLeaf } from "obsidian";
 import { CymoseSettingTab, CymoseSettings, DEFAULT_SETTINGS } from "./settings";
 import { CymoseAdapter } from "./providers/cymose";
 import { OpenRouterAdapter } from "./providers/openrouter";
@@ -29,6 +29,23 @@ import { fetchTree, mirrorSubtree, roots, subtree, SyncError, type SyncNode } fr
 // way the conversation itself lives only in the vault — but "we never see it"
 // is not true of the account path and this file should not imply that it is.
 
+/**
+ * Bring a leaf into view, on every Obsidian this plugin claims to support.
+ *
+ * `revealLeaf` returned void for years and returns a Promise in recent
+ * versions. Awaiting it is what the community reviewer flags as
+ * `no-unsupported-api`: the await only makes sense on an API newer than the
+ * declared minAppVersion of 1.5.0, so on 1.5.0 the plugin would be calling
+ * something that is not there in the shape it expects.
+ *
+ * Calling and not awaiting is correct on both. There is nothing after it that
+ * depends on the reveal having finished — the leaf is returned either way, and
+ * the panel renders when Obsidian gets to it.
+ */
+function revealLeaf(app: App, leaf: WorkspaceLeaf): void {
+	void (app.workspace.revealLeaf(leaf) as unknown as void | Promise<void>);
+}
+
 export default class CymosePlugin extends Plugin {
 	settings: CymoseSettings = DEFAULT_SETTINGS;
 
@@ -52,7 +69,10 @@ export default class CymosePlugin extends Plugin {
 		});
 		this.addCommand({
 			id: "pull-from-web",
-			name: "Pull a tree from Cymose Web",
+			// No "Cymose" in the name: the palette already shows the plugin name
+			// next to it, so the old wording read "Cymose: Pull a tree from
+			// Cymose Web".
+			name: "Pull a tree from the web",
 			callback: () => void this.pullFromWeb(),
 		});
 		this.addCommand({
@@ -174,13 +194,13 @@ export default class CymosePlugin extends Plugin {
 	async openPanel(): Promise<CymoseView | null> {
 		const existing = this.app.workspace.getLeavesOfType(VIEW_TYPE);
 		if (existing.length > 0) {
-			await this.app.workspace.revealLeaf(existing[0]);
+			revealLeaf(this.app, existing[0]);
 			return existing[0].view as CymoseView;
 		}
 		const leaf: WorkspaceLeaf | null = this.app.workspace.getRightLeaf(false);
 		if (!leaf) return null;
 		await leaf.setViewState({ type: VIEW_TYPE, active: true });
-		await this.app.workspace.revealLeaf(leaf);
+		revealLeaf(this.app, leaf);
 		return leaf.view as CymoseView;
 	}
 

@@ -1,5 +1,7 @@
 import esbuild from "esbuild";
-import builtins from "builtin-modules";
+// Node's own list, rather than the `builtin-modules` package the Obsidian
+// reviewer asks plugins to drop. Same data, one fewer dependency.
+import { builtinModules as builtins } from "node:module";
 
 // Obsidian loads a single file, so everything bundles into main.js at the
 // plugin root. `obsidian`, electron and node builtins are supplied by the host

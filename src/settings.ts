@@ -107,7 +107,7 @@ export class CymoseSettingTab extends PluginSettingTab {
 				"copy of it: Cymose answers the request and stores nothing but the credits it cost.",
 		});
 
-		containerEl.createEl("h3", { text: "Cymose account" });
+		new Setting(containerEl).setName("Cymose account").setHeading();
 
 		// Where the token comes from, in the order you have to do it.
 		//
@@ -167,7 +167,7 @@ export class CymoseSettingTab extends PluginSettingTab {
 		this.statusEl = containerEl.createEl("p", { cls: "cymose-status" });
 		this.statusEl.hide();
 
-		containerEl.createEl("h3", { text: "Or bring your own key" });
+		new Setting(containerEl).setName("Or bring your own key").setHeading();
 		containerEl.createEl("p", {
 			cls: "cymose-notice",
 			text:
@@ -204,7 +204,6 @@ export class CymoseSettingTab extends PluginSettingTab {
 				slider
 					.setLimits(0, 1.5, 0.1)
 					.setValue(this.plugin.settings.temperature)
-					.setDynamicTooltip()
 					.onChange(async (value) => {
 						this.plugin.settings.temperature = value;
 						await this.plugin.saveSettings();
@@ -238,7 +237,7 @@ export class CymoseSettingTab extends PluginSettingTab {
 					}),
 			);
 
-		containerEl.createEl("h3", { text: "Advanced" });
+		new Setting(containerEl).setName("Advanced").setHeading();
 
 		new Setting(containerEl)
 			.setName("Cymose API address")
