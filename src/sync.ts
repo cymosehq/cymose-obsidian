@@ -72,7 +72,7 @@ export async function fetchTree(baseUrl: string, token: string): Promise<SyncTre
 		throw new SyncError(`Couldn't reach Cymose: ${(error as Error).message}`);
 	}
 
-	if (response.status === 401) throw new SyncError("That access token was rejected. Create a new one at chat.cymose.app under Settings → Connected apps.");
+	if (response.status === 401) throw new SyncError("That access token was rejected. Create a new one at web.cymose.app under Settings → Connected apps.");
 	if (response.status >= 400) throw new SyncError(`Cymose returned ${response.status}.`);
 
 	let tree: SyncTree;

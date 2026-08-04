@@ -120,7 +120,7 @@ export class CymoseSettingTab extends PluginSettingTab {
 		steps.createEl("li").append(
 			createFragment((frag) => {
 				frag.appendText("Open ");
-				frag.createEl("a", { href: "https://chat.cymose.app", text: "chat.cymose.app" });
+				frag.createEl("a", { href: "https://web.cymose.app", text: "web.cymose.app" });
 				frag.appendText(" and sign in (or create a free account).");
 			}),
 		);

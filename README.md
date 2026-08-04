@@ -11,7 +11,7 @@ single line.
 ## Getting started
 
 - **Paste a token and it works.** Create one at
-  [chat.cymose.app](https://chat.cymose.app) under Settings → Connected apps.
+  [web.cymose.app](https://web.cymose.app) under Settings → Connected apps.
   A Cymose account on the free tier gets the same
   allowance as the web app; a plan raises it. One account, one bill, the same
   credits whether you're on a canvas in a browser or a canvas in your vault.
@@ -87,7 +87,7 @@ That one decision buys most of the product:
 
 ## Use it
 
-1. Get a token: sign in at [chat.cymose.app](https://chat.cymose.app), open
+1. Get a token: sign in at [web.cymose.app](https://web.cymose.app), open
    **Settings → Connected apps**, create one, and copy it — it is shown once.
    Then Settings → Cymose → paste it, and press **Test** to check it took. (Or
    paste an OpenRouter key instead, if you would rather spend that.)
