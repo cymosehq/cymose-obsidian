@@ -42,7 +42,7 @@ export class OpenRouterAdapter implements ModelAdapter {
 				"Content-Type": "application/json",
 				Authorization: `Bearer ${this.apiKey}`,
 				// Attribution on OpenRouter's public leaderboard. Optional, free.
-				"HTTP-Referer": "https://cymose.dev",
+				"HTTP-Referer": "https://cymose.app",
 				"X-Title": "Cymose for Obsidian",
 			},
 			body: JSON.stringify({

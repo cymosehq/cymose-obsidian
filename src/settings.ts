@@ -55,7 +55,7 @@ export const DEFAULT_SETTINGS: CymoseSettings = {
 	folder: "Cymose",
 	systemPrompt:
 		"You are part of a branching conversation on a canvas. Answer the current message directly and concisely. Earlier messages are the branch you are on; do not restate them.",
-	cymoseApiUrl: "https://api.cymose.cloud",
+	cymoseApiUrl: "https://api.cymose.app",
 	cymoseToken: "",
 	syncMap: {},
 	modelCatalogue: [],
@@ -111,7 +111,7 @@ export class CymoseSettingTab extends PluginSettingTab {
 
 		// Where the token comes from, in the order you have to do it.
 		//
-		// The previous wording said "from your account page at cymose.dev". There
+		// The previous wording said "from your account page at cymose.app". There
 		// was no account page, and the closest thing to a token was the Supabase
 		// session sitting in devtools — which expires in an hour. So the
 		// documented route was impossible, the discoverable one broke before
@@ -120,7 +120,7 @@ export class CymoseSettingTab extends PluginSettingTab {
 		steps.createEl("li").append(
 			createFragment((frag) => {
 				frag.appendText("Open ");
-				frag.createEl("a", { href: "https://chat.cymose.dev", text: "chat.cymose.dev" });
+				frag.createEl("a", { href: "https://chat.cymose.app", text: "chat.cymose.app" });
 				frag.appendText(" and sign in (or create a free account).");
 			}),
 		);
