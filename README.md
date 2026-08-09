@@ -31,7 +31,7 @@ single line.
 
 The short version, because you are about to give a plugin a credential and let
 it write files in your vault. Every line of it is checkable against the source,
-which is eight files and under 2000 lines, comments included.
+which is nine files and about 2,250 lines, comments included.
 
 - **What it writes:** `.canvas` files in your conversations folder, and its own
   settings. It never modifies a note. Pinning a note reads it; the embed goes
