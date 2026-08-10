@@ -17,8 +17,14 @@ export type ModelOptions = {
  */
 export interface ModelAdapter {
 	readonly id: string;
-	/** Streams the answer in chunks as they arrive. */
-	chat(messages: Message[], options: ModelOptions): AsyncGenerator<string>;
+	/**
+	 * Streams the answer in chunks as they arrive.
+	 *
+	 * `signal` aborts the request when the user presses Stop. It surfaces as a
+	 * DOMException named "AbortError" out of the generator — the caller keeps
+	 * whatever chunks it already had rather than treating it as a failure.
+	 */
+	chat(messages: Message[], options: ModelOptions, signal?: AbortSignal): AsyncGenerator<string>;
 }
 
 /** Carries the provider's status so a caller can tell "slow down" from "wrong key". */

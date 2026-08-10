@@ -19,7 +19,7 @@ export class OpenRouterAdapter implements ModelAdapter {
 
 	constructor(private apiKey: string) {}
 
-	async *chat(messages: Message[], options: ModelOptions): AsyncGenerator<string> {
+	async *chat(messages: Message[], options: ModelOptions, signal?: AbortSignal): AsyncGenerator<string> {
 		if (!this.apiKey.trim()) {
 			throw new ProviderError(401, "No OpenRouter key set. Add one in Cymose settings.");
 		}
@@ -52,6 +52,7 @@ export class OpenRouterAdapter implements ModelAdapter {
 				max_tokens: options.maxTokens,
 				stream: true,
 			}),
+			signal,
 		});
 
 		if (!response.ok || !response.body) {

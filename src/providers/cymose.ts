@@ -26,7 +26,7 @@ export class CymoseAdapter implements ModelAdapter {
 		private token: string,
 	) {}
 
-	async *chat(messages: Message[], options: ModelOptions): AsyncGenerator<string> {
+	async *chat(messages: Message[], options: ModelOptions, signal?: AbortSignal): AsyncGenerator<string> {
 		if (!this.token.trim()) {
 			throw new ProviderError(401, "Not signed in. Sign in to Cymose in settings.");
 		}
@@ -55,6 +55,7 @@ export class CymoseAdapter implements ModelAdapter {
 				system,
 				temperature: options.temperature,
 			}),
+			signal,
 		});
 
 		if (!response.ok || !response.body) {
