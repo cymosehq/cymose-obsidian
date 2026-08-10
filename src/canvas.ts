@@ -223,7 +223,34 @@ function escapeRegExp(text: string): string {
 
 /** Strips our bookkeeping comments. What the model reads is what a person reads. */
 export function textForModel(text: string): string {
-	return text.replace(/<!--\s*\/?cymose:[^>]*-->[ \t]*\n?/g, "").trim();
+	return (
+		text
+			// The model caption goes whole — content and delimiters. It's a label
+			// for a person comparing branches, not part of the conversation the
+			// next turn is answered against.
+			.replace(/<!--\s*cymose:model\s*-->[\s\S]*?<!--\s*\/cymose:model\s*-->[ \t]*\n?/g, "")
+			// The remaining tags (promoted-conclusion delimiters and the like) are
+			// removed but their human-readable content between them is kept.
+			.replace(/<!--\s*\/?cymose:[^>]*-->[ \t]*\n?/g, "")
+			.trim()
+	);
+}
+
+const MODEL_OPEN = "<!-- cymose:model -->";
+const MODEL_CLOSE = "<!-- /cymose:model -->";
+
+/**
+ * Appends a caption naming the model that wrote an answer.
+ *
+ * Wrapped in cymose comments so textForModel drops it whole — visible on the
+ * canvas, invisible to the model. The point of a per-branch model choice is
+ * only realised if, a day later, you can still see which branch ran on which
+ * model; this is that record, and it lives in the node, not in state of ours.
+ */
+export function withModelTag(text: string, model: string): string {
+	const name = model.trim();
+	if (!name) return text;
+	return `${text.trimEnd()}\n\n${MODEL_OPEN}\n*— ${name}*\n${MODEL_CLOSE}`;
 }
 
 /**

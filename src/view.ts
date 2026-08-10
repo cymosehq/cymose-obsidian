@@ -14,9 +14,11 @@ import {
 	readCanvas,
 	setPromoted,
 	textForModel,
+	withModelTag,
 	writeCanvas,
 } from "./canvas";
 import { Message, ProviderError } from "./providers/types";
+import { FALLBACK_MODEL_IDS, describe, groupByTier } from "./models";
 import type CymosePlugin from "./main";
 
 /**
@@ -80,10 +82,17 @@ export class CymoseView extends ItemView {
 	private parentId: string | null = null;
 	private sending = false;
 	private streamed = "";
+	// The in-flight turn's canceller, and whether the user pressed Stop. `abort`
+	// exists only while a stream is open; `stopped` is read by the callers to
+	// decide whether to keep the partial and stop rather than carry on.
+	private abort: AbortController | null = null;
+	private stopped = false;
 
 	private parentSelect!: HTMLSelectElement;
+	private modelSelect!: HTMLSelectElement;
 	private prompt!: HTMLTextAreaElement;
 	private sendButton!: HTMLButtonElement;
+	private stopButton!: HTMLButtonElement;
 	private exploreButton!: HTMLButtonElement;
 	private promoteButton!: HTMLButtonElement;
 	private pinButton!: HTMLButtonElement;
@@ -142,6 +151,16 @@ export class CymoseView extends ItemView {
 			this.parentId = this.parentSelect.value || null;
 		};
 
+		// Model per turn — the thing a branching tool is for. Pick a cheap model
+		// to sketch a branch, a strong one to promote it; ask the same question
+		// three ways on three different models. It lives here, not only in
+		// settings, because choosing it is the act, not a preference you set once.
+		const modelRow = root.createDiv({ cls: "cymose-field" });
+		modelRow.createEl("label", { text: "Model" });
+		this.modelSelect = modelRow.createEl("select", { cls: "dropdown" });
+		this.modelSelect.onchange = () => void this.chooseModel(this.modelSelect.value);
+		this.populateModels();
+
 		const promptRow = root.createDiv({ cls: "cymose-field" });
 		promptRow.createEl("label", { text: "Message" });
 		this.prompt = promptRow.createEl("textarea", { cls: "cymose-prompt" });
@@ -162,6 +181,13 @@ export class CymoseView extends ItemView {
 		const actions = root.createDiv({ cls: "cymose-actions" });
 		this.sendButton = actions.createEl("button", { cls: "mod-cta", text: "Send" });
 		this.sendButton.onclick = () => void this.send();
+
+		// Cancels the open stream. Hidden until a turn is running, so the row
+		// isn't cluttered with a button that does nothing most of the time.
+		this.stopButton = actions.createEl("button", { cls: "mod-warning", text: "Stop" });
+		this.stopButton.title = "Stop the answer. What already streamed is kept.";
+		this.stopButton.onclick = () => this.abort?.abort();
+		this.stopButton.hide();
 
 		this.exploreButton = actions.createEl("button", { text: "Explore 3 ways" });
 		this.exploreButton.title = "Ask this once per strategy — three branches off the same question.";
@@ -210,6 +236,10 @@ export class CymoseView extends ItemView {
 			return;
 		}
 		this.refreshParents();
+		// A catalogue fetched by the settings tab after this panel was built only
+		// reaches the picker on a reload — cheap to rebuild, and it keeps the
+		// shown model in step with settings if it was changed there.
+		this.populateModels();
 		this.setStatus(`${this.file.basename} · ${this.data.nodes.length} node${this.data.nodes.length === 1 ? "" : "s"}`);
 	}
 
@@ -246,6 +276,58 @@ export class CymoseView extends ItemView {
 		this.parentSelect.value = this.parentId ?? "";
 	}
 
+	/**
+	 * Fills the panel's model picker from the cached catalogue.
+	 *
+	 * Same source as the settings tab: the tiered catalogue from GET /v1/models
+	 * when a Cymose account is what pays for the turn, the bare fallback ids when
+	 * an OpenRouter key does (our credit tiers describe a bill OpenRouter isn't
+	 * sending). The currently-selected model is always kept selectable, even if
+	 * it's a free-text id or a hosted model an own-key list hides — the panel
+	 * must never show a different model than the turn will actually use.
+	 */
+	private populateModels(): void {
+		const { model, modelCatalogue, cymoseToken, apiKey } = this.plugin.settings;
+		const usingOwnKey = !cymoseToken.trim() && Boolean(apiKey.trim());
+		const catalogue = usingOwnKey ? [] : modelCatalogue;
+		this.modelSelect.empty();
+
+		const known = new Set<string>();
+		if (catalogue.length) {
+			// Obsidian's dropdown has no group API, so the optgroups go on the
+			// select directly — the same approach the settings tab takes.
+			for (const group of groupByTier(catalogue)) {
+				const optgroup = this.modelSelect.createEl("optgroup");
+				optgroup.label = group.label;
+				for (const entry of group.models) {
+					optgroup.createEl("option", { value: entry.id, text: describe(entry) });
+					known.add(entry.id);
+				}
+			}
+		} else {
+			for (const id of FALLBACK_MODEL_IDS) {
+				this.modelSelect.createEl("option", { value: id, text: id });
+				known.add(id);
+			}
+		}
+		if (model && !known.has(model)) {
+			this.modelSelect.createEl("option", { value: model, text: model });
+		}
+		this.modelSelect.value = model;
+	}
+
+	private async chooseModel(id: string): Promise<void> {
+		if (!id) return;
+		this.plugin.settings.model = id;
+		await this.plugin.saveSettings();
+	}
+
+	/** How the answering model reads on a node: the catalogue's friendly name
+	 *  when we have it, the raw id otherwise. */
+	private modelLabel(id: string): string {
+		return this.plugin.settings.modelCatalogue.find((m) => m.id === id)?.label ?? id;
+	}
+
 	private setStatus(text: string): void {
 		this.status.setText(text);
 	}
@@ -253,10 +335,13 @@ export class CymoseView extends ItemView {
 	/** Everything that writes or spends runs one at a time, and the panel says so. */
 	private begin(busyLabel: string): void {
 		this.sending = true;
+		this.stopped = false;
 		this.sendButton.setText(busyLabel);
 		for (const button of [this.sendButton, this.exploreButton, this.promoteButton, this.pinButton]) {
 			button.disabled = true;
 		}
+		this.stopButton.disabled = false;
+		this.stopButton.show();
 	}
 
 	private end(): void {
@@ -265,6 +350,7 @@ export class CymoseView extends ItemView {
 		for (const button of [this.sendButton, this.exploreButton, this.promoteButton, this.pinButton]) {
 			button.disabled = false;
 		}
+		this.stopButton.hide();
 	}
 
 	/** A canvas to write to and a way to pay for the turn, or a reason why not. */
@@ -296,18 +382,33 @@ export class CymoseView extends ItemView {
 	 * a second, which is how you make an editor feel broken — and the live text
 	 * is right here in the panel while it arrives.
 	 */
-	private async streamTurn(messages: Message[], heading: string): Promise<string> {
+	private async streamTurn(messages: Message[], heading: string, model: string): Promise<string> {
 		const prefix = heading ? `${heading}\n\n` : "";
 		this.streamed = "";
 		this.preview.setText(prefix);
-		for await (const chunk of this.plugin.adapter().chat(messages, {
-			model: this.plugin.settings.model,
-			temperature: this.plugin.settings.temperature,
-			maxTokens: this.plugin.settings.maxTokens,
-		})) {
-			this.streamed += chunk;
-			this.preview.setText(prefix + this.streamed);
-			this.preview.scrollTop = this.preview.scrollHeight;
+		const controller = new AbortController();
+		this.abort = controller;
+		try {
+			for await (const chunk of this.plugin.adapter().chat(messages, {
+				model,
+				temperature: this.plugin.settings.temperature,
+				maxTokens: this.plugin.settings.maxTokens,
+			}, controller.signal)) {
+				this.streamed += chunk;
+				this.preview.setText(prefix + this.streamed);
+				this.preview.scrollTop = this.preview.scrollHeight;
+			}
+		} catch (error) {
+			// Stop pressed: keep what streamed and let the caller write it, rather
+			// than throwing away a half-written answer the user chose to cut short.
+			// Any other error is a real failure and propagates.
+			if (error instanceof DOMException && error.name === "AbortError") {
+				this.stopped = true;
+			} else {
+				throw error;
+			}
+		} finally {
+			this.abort = null;
 		}
 		return this.streamed.trim();
 	}
@@ -320,6 +421,9 @@ export class CymoseView extends ItemView {
 		const file = this.file;
 		if (!file) return;
 
+		// Fixed for the whole turn, so the caption names the model that actually
+		// answered even if the picker is changed while the answer streams.
+		const usedModel = this.plugin.settings.model;
 		this.begin("Sending…");
 		try {
 			// Re-read before writing: the file may have changed since the panel
@@ -328,13 +432,24 @@ export class CymoseView extends ItemView {
 			const question = appendNode(this.data, this.parentId, text, COLOR_USER);
 			await writeCanvas(this.app.vault, file, this.data);
 
-			const answer = (await this.streamTurn(await this.buildMessages(question.id), "")) ||
-				"_(the model returned nothing)_";
+			const streamed = await this.streamTurn(await this.buildMessages(question.id), "", usedModel);
+			if (this.stopped && !streamed) {
+				// Cut short before a word arrived: the question stays, but writing an
+				// empty answer node would just be litter to delete.
+				new Notice("Cymose: stopped. Your question is on the canvas.");
+				await this.reload();
+				return;
+			}
+			// Tag real answers with the model; leave the "nothing came back"
+			// placeholder untagged — there's no answer to attribute.
+			const answer = streamed
+				? withModelTag(streamed, this.modelLabel(usedModel))
+				: "_(the model returned nothing)_";
 
 			this.data = await readCanvas(this.app.vault, file);
 			const node = appendNode(this.data, question.id, answer, COLOR_ASSISTANT);
-			node.height = estimateHeight(answer);
 			await writeCanvas(this.app.vault, file, this.data);
+			if (this.stopped) new Notice("Cymose: stopped — kept the partial answer.");
 
 			this.prompt.value = "";
 			await this.reload();
@@ -368,6 +483,7 @@ export class CymoseView extends ItemView {
 		const file = this.file;
 		if (!file) return;
 
+		const usedModel = this.plugin.settings.model;
 		this.begin("Exploring…");
 		try {
 			this.data = await readCanvas(this.app.vault, file);
@@ -383,6 +499,7 @@ export class CymoseView extends ItemView {
 					answer = await this.streamTurn(
 						this.withNudge(base, strategy.nudge),
 						`${index + 1}/${STRATEGIES.length} · ${strategy.label}`,
+						usedModel,
 					);
 				} catch (error) {
 					// One strategy failing is no reason to throw away the ones that
@@ -391,18 +508,21 @@ export class CymoseView extends ItemView {
 					this.fail(error);
 					break;
 				}
-				if (!answer) continue;
-
-				this.data = await readCanvas(this.app.vault, file);
-				const node = appendNode(
-					this.data,
-					question.id,
-					`_${strategy.label}_\n\n${answer}`,
-					COLOR_ASSISTANT,
-				);
-				node.height = estimateHeight(node.text ?? "");
-				await writeCanvas(this.app.vault, file, this.data);
-				written += 1;
+				if (answer) {
+					this.data = await readCanvas(this.app.vault, file);
+					const node = appendNode(
+						this.data,
+						question.id,
+						withModelTag(`_${strategy.label}_\n\n${answer}`, this.modelLabel(usedModel)),
+						COLOR_ASSISTANT,
+					);
+					node.height = estimateHeight(node.text ?? "");
+					await writeCanvas(this.app.vault, file, this.data);
+					written += 1;
+				}
+				// Stop ends the whole exploration, not just this strategy — the
+				// branches already written stay, the ones not yet asked don't run.
+				if (this.stopped) break;
 			}
 
 			this.prompt.value = "";
@@ -476,7 +596,14 @@ export class CymoseView extends ItemView {
 					{ role: "user", content: transcript },
 				],
 				`promoting into “${targetLabel}”`,
+				this.plugin.settings.model,
 			);
+			// A half-written conclusion is worse than none — it's inherited by every
+			// later branch. If Stop cut it short, promote nothing.
+			if (this.stopped) {
+				new Notice("Cymose: promotion stopped — nothing written.");
+				return;
+			}
 			if (!digest) {
 				new Notice("Cymose: the model returned nothing to promote.");
 				return;
