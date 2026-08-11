@@ -19,6 +19,7 @@ import {
 } from "./canvas";
 import { Message, ProviderError } from "./providers/types";
 import { FALLBACK_MODEL_IDS, describe, groupByTier } from "./models";
+import { CYMOSE_ICON } from "./main";
 import type CymosePlugin from "./main";
 
 /**
@@ -115,7 +116,7 @@ export class CymoseView extends ItemView {
 	}
 
 	getIcon(): string {
-		return "git-branch";
+		return CYMOSE_ICON;
 	}
 
 	async onOpen(): Promise<void> {

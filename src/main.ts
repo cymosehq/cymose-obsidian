@@ -1,4 +1,4 @@
-import { App, FuzzySuggestModal, Notice, Plugin, requestUrl, TFile, WorkspaceLeaf } from "obsidian";
+import { addIcon, App, FuzzySuggestModal, Notice, Plugin, requestUrl, TFile, WorkspaceLeaf } from "obsidian";
 import { CymoseSettingTab, CymoseSettings, DEFAULT_SETTINGS } from "./settings";
 import { CymoseAdapter } from "./providers/cymose";
 import { OpenRouterAdapter } from "./providers/openrouter";
@@ -46,16 +46,37 @@ function revealLeaf(app: App, leaf: WorkspaceLeaf): void {
 	void (app.workspace.revealLeaf(leaf) as unknown as void | Promise<void>);
 }
 
+// The Cymose mark (shared/brand/mark-cyme.svg): an upside-down Y — a stem into a
+// filled node, two arms splaying into open ones. Registered as an Obsidian icon
+// so the ribbon button and the panel tab carry the logo instead of a generic
+// lucide glyph. addIcon wraps this in <svg viewBox="0 0 100 100">, so the artwork
+// (drawn on a 64 grid) is scaled up by 100/64 = 1.5625 and stroked in
+// currentColor, which makes it follow the theme like every built-in icon does.
+export const CYMOSE_ICON = "cymose-mark";
+const CYMOSE_ICON_SVG =
+	'<g transform="scale(1.5625)" fill="none" stroke="currentColor" stroke-width="4.5" stroke-linecap="round">' +
+	'<path d="M32 7 L32 21"/>' +
+	'<path d="M28.4 31.8 L18.4 45.2"/>' +
+	'<path d="M35.6 31.8 L45.6 45.2"/>' +
+	'<circle cx="32" cy="27" r="6" fill="currentColor" stroke="none"/>' +
+	'<circle cx="14" cy="51" r="5"/>' +
+	'<circle cx="50" cy="51" r="5"/>' +
+	"</g>";
+
 export default class CymosePlugin extends Plugin {
 	settings: CymoseSettings = DEFAULT_SETTINGS;
 
 	async onload(): Promise<void> {
 		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
 
+		// Register the logo before anything references it — the ribbon button and
+		// the panel tab both ask for it by id.
+		addIcon(CYMOSE_ICON, CYMOSE_ICON_SVG);
+
 		this.registerView(VIEW_TYPE, (leaf) => new CymoseView(leaf, this));
 		this.addSettingTab(new CymoseSettingTab(this.app, this));
 
-		this.addRibbonIcon("git-branch", "Cymose", () => void this.openPanel());
+		this.addRibbonIcon(CYMOSE_ICON, "Cymose", () => void this.openPanel());
 
 		this.addCommand({
 			id: "open-panel",
