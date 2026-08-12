@@ -20,6 +20,7 @@ import {
 import { Message, ProviderError } from "./providers/types";
 import { FALLBACK_MODEL_IDS, describe, groupByTier } from "./models";
 import { CYMOSE_ICON } from "./main";
+import { stripServerMarkers } from "./markers";
 import type CymosePlugin from "./main";
 
 /**
@@ -396,7 +397,7 @@ export class CymoseView extends ItemView {
 				maxTokens: this.plugin.settings.maxTokens,
 			}, controller.signal)) {
 				this.streamed += chunk;
-				this.preview.setText(prefix + this.streamed);
+				this.preview.setText(prefix + stripServerMarkers(this.streamed));
 				this.preview.scrollTop = this.preview.scrollHeight;
 			}
 		} catch (error) {
@@ -411,7 +412,7 @@ export class CymoseView extends ItemView {
 		} finally {
 			this.abort = null;
 		}
-		return this.streamed.trim();
+		return stripServerMarkers(this.streamed).trim();
 	}
 
 	/** One turn: write the question, stream the answer, then write it. */
