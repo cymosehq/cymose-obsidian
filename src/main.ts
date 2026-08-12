@@ -68,7 +68,7 @@ export default class CymosePlugin extends Plugin {
 	settings: CymoseSettings = DEFAULT_SETTINGS;
 
 	async onload(): Promise<void> {
-		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+		this.settings = Object.assign({}, DEFAULT_SETTINGS, (await this.loadData()) as Partial<CymoseSettings>);
 
 		// Register the logo before anything references it — the ribbon button and
 		// the panel tab both ask for it by id.

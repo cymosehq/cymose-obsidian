@@ -84,7 +84,7 @@ export class OpenRouterAdapter implements ModelAdapter {
 					error?: { message?: string; code?: number };
 				};
 				try {
-					event = JSON.parse(data);
+					event = JSON.parse(data) as typeof event;
 				} catch {
 					continue; // a malformed frame is not worth failing the turn over
 				}
