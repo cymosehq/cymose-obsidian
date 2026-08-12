@@ -137,6 +137,11 @@ export class CymoseView extends ItemView {
 				}
 			}),
 		);
+
+		// Fetch catalogue silently. If updated, repopulate the dropdown.
+		void this.plugin.refreshCatalogue().then((updated) => {
+			if (updated) this.populateModels();
+		});
 	}
 
 	private build(): void {

@@ -3,7 +3,6 @@ import type CymosePlugin from "./main";
 import type { SyncMap } from "./sync";
 import {
 	FALLBACK_MODEL_IDS,
-	fetchCatalogue,
 	groupByTier,
 	describe,
 	isCymoseHostedModel,
@@ -33,8 +32,7 @@ export interface CymoseSettings {
 	modelCatalogueAt: number;
 }
 
-/** How long a cached catalogue is trusted. The lineup changes in weeks. */
-const CATALOGUE_TTL_MS = 24 * 60 * 60 * 1000;
+
 
 // The default costs no credits.
 //
@@ -268,7 +266,9 @@ export class CymoseSettingTab extends PluginSettingTab {
 		// Kicked off after the tab is drawn, not before: a slow network should
 		// delay the catalogue, never the settings screen. It re-renders if it
 		// finds something new.
-		void this.refreshCatalogue();
+		void this.plugin.refreshCatalogue().then((updated) => {
+			if (updated && this.containerEl.isConnected) this.display();
+		});
 	}
 
 	/**
@@ -341,27 +341,4 @@ export class CymoseSettingTab extends PluginSettingTab {
 		}
 	}
 
-	/**
-	 * Reads the lineup from the API, at most once a day.
-	 *
-	 * Failure is silent on purpose. This decorates a picker that already works
-	 * without it, and somebody who opened settings to paste a token should not
-	 * be met with an error about a list they had not asked for.
-	 */
-	private async refreshCatalogue(): Promise<void> {
-		const { cymoseToken, cymoseApiUrl, modelCatalogueAt, modelCatalogue } = this.plugin.settings;
-		if (!cymoseToken.trim()) return;
-		if (modelCatalogue.length && Date.now() - modelCatalogueAt < CATALOGUE_TTL_MS) return;
-
-		try {
-			const models = await fetchCatalogue(cymoseApiUrl, cymoseToken);
-			this.plugin.settings.modelCatalogue = models;
-			this.plugin.settings.modelCatalogueAt = Date.now();
-			await this.plugin.saveSettings();
-			// Guard against redrawing a tab the user has already closed.
-			if (this.containerEl.isConnected) this.display();
-		} catch {
-			// Keep whatever was cached, and the fallback ids if there is nothing.
-		}
-	}
 }

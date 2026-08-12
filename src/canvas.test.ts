@@ -18,7 +18,6 @@ import {
 	textForModel,
 	withModelTag,
 	setPromoted,
-	CanvasData,
 	CanvasNode
 } from "./canvas";
 
