@@ -6,6 +6,7 @@ import type { ModelAdapter } from "./providers/types";
 import { CymoseView, VIEW_TYPE } from "./view";
 import { appendNode, COLOR_USER, createCanvas, readCanvas, writeCanvas } from "./canvas";
 import { fetchTree, mirrorSubtree, roots, subtree, SyncError, type SyncNode } from "./sync";
+import { fetchCatalogue } from "./models";
 
 // Cymose for Obsidian.
 //
@@ -67,7 +68,11 @@ export default class CymosePlugin extends Plugin {
 	settings: CymoseSettings = DEFAULT_SETTINGS;
 
 	async onload(): Promise<void> {
-		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+		this.settings = Object.assign({}, DEFAULT_SETTINGS, (await this.loadData()) as Partial<CymoseSettings>);
+
+		// Register the logo before anything references it — the ribbon button and
+		// the panel tab both ask for it by id.
+		addIcon(CYMOSE_ICON, CYMOSE_ICON_SVG);
 
 		// Register the logo before anything references it — the ribbon button and
 		// the panel tab both ask for it by id.
@@ -210,6 +215,26 @@ export default class CymosePlugin extends Plugin {
 
 	async saveSettings(): Promise<void> {
 		await this.saveData(this.settings);
+	}
+
+	/**
+	 * Reads the lineup from the API, at most once a day.
+	 * Returns true if the catalogue was updated.
+	 */
+	async refreshCatalogue(): Promise<boolean> {
+		const { cymoseToken, cymoseApiUrl, modelCatalogueAt, modelCatalogue } = this.settings;
+		if (!cymoseToken.trim()) return false;
+		if (modelCatalogue.length && Date.now() - modelCatalogueAt < 24 * 60 * 60 * 1000) return false;
+
+		try {
+			const models = await fetchCatalogue(cymoseApiUrl, cymoseToken);
+			this.settings.modelCatalogue = models;
+			this.settings.modelCatalogueAt = Date.now();
+			await this.saveSettings();
+			return true;
+		} catch {
+			return false;
+		}
 	}
 
 	async openPanel(): Promise<CymoseView | null> {
