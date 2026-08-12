@@ -14,6 +14,14 @@
 #
 # Runs only on staged files, so it's fast. `git commit --no-verify` skips it
 # if you ever need to.
+#
+# NOTE on the NUL check: this was originally `grep -I`, which is backwards —
+# grep's -I means "treat a file it detects as binary as a NON-match", i.e. it
+# SKIPS exactly the files a NUL byte would make it classify as binary. That
+# made the check self-defeating: the first real NUL-byte corruption sailed
+# through two commits before anyone noticed, because the tool built to catch
+# it never actually searched the corrupted file. Comparing byte counts
+# before/after stripping NULs has no such binary-detection step to fool.
 
 bad=0
 
@@ -25,14 +33,16 @@ for f in $(git diff --cached --name-only --diff-filter=ACM); do
 	esac
 	[ -f "$f" ] || continue
 
-	if grep -qIP '\x00' -- "$f" 2>/dev/null; then
+	orig_size=$(wc -c <"$f")
+	stripped_size=$(tr -d '\000' <"$f" | wc -c)
+	if [ "$orig_size" != "$stripped_size" ]; then
 		echo "✗ $f contains a NUL byte — likely silent corruption, not intentional binary content." >&2
 		bad=1
 	fi
 
-	if grep -nE '^(<<<<<<<|>>>>>>>)( |$)' -- "$f" >/dev/null 2>&1; then
+	if grep -anE '^(<<<<<<<|>>>>>>>)( |$)' -- "$f" >/dev/null 2>&1; then
 		echo "✗ $f has an unresolved merge-conflict marker:" >&2
-		grep -nE '^(<<<<<<<|>>>>>>>)( |$)' -- "$f" >&2
+		grep -anE '^(<<<<<<<|>>>>>>>)( |$)' -- "$f" >&2
 		bad=1
 	fi
 done
