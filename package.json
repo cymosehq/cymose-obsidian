@@ -6,13 +6,14 @@
 	"private": true,
 	"scripts": {
 		"dev": "node esbuild.config.mjs",
-		"build": "tsc --noEmit && node esbuild.config.mjs production"
+		"build": "tsc --noEmit && node esbuild.config.mjs production",
+		"test": "vitest"
 	},
 	"devDependencies": {
 		"@types/node": "^20",
-		
 		"esbuild": "^0.21.0",
 		"obsidian": "^1.5.0",
-		"typescript": "^5.4.0"
+		"typescript": "^5.4.0",
+		"vitest": "^4.1.10"
 	}
 }
