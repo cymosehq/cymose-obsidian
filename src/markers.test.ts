@@ -1,40 +1,28 @@
+import { describe, it, expect } from "vitest";
 import { stripServerMarkers } from "./markers";
 
-function assertEqual(actual: string, expected: string, msg: string) {
-  if (actual.trim() !== expected.trim()) {
-    throw new Error(`Test failed [${msg}]:\n  Expected: ${JSON.stringify(expected)}\n  Actual:   ${JSON.stringify(actual)}`);
-  }
-  console.log(`✓ Passed: ${msg}`);
-}
+describe("stripServerMarkers", () => {
+  it("strips control markers", () => {
+    expect(
+      stripServerMarkers("Hello world! ⟦SWITCH:qwen3-30b-a3b-fp8⟧ ⟦NOTICE:image:served⟧ How can I help? ⟦TRUNCATED⟧⟦THINKING⟧").trim()
+    ).toBe("Hello world!   How can I help?");
+  });
 
-console.log("Running markers.test.ts...");
+  it("strips closed ASK tag and extracts question", () => {
+    expect(
+      stripServerMarkers("I can help with that. ⟦ASK⟧Which framework do you prefer?||React||Vue||Svelte⟦/ASK⟧").trim()
+    ).toBe("I can help with that. \n\nWhich framework do you prefer?");
+  });
 
-// Test 1: Control markers
-assertEqual(
-  stripServerMarkers("Hello world! ⟦SWITCH:qwen3-30b-a3b-fp8⟧ ⟦NOTICE:image:served⟧ How can I help? ⟦TRUNCATED⟧⟦THINKING⟧"),
-  "Hello world!   How can I help?",
-  "Strips control markers"
-);
+  it("strips unclosed ASK tag", () => {
+    expect(
+      stripServerMarkers("Let me know. ⟦ASK⟧Which database engine?||Postgres||MySQL").trim()
+    ).toBe("Let me know. \n\nWhich database engine?");
+  });
 
-// Test 2: Closed ASK marker with options
-assertEqual(
-  stripServerMarkers("I can help with that. ⟦ASK⟧Which framework do you prefer?||React||Vue||Svelte⟦/ASK⟧"),
-  "I can help with that. \n\nWhich framework do you prefer?",
-  "Strips ASK tag and extracts question"
-);
-
-// Test 3: Unclosed ASK marker
-assertEqual(
-  stripServerMarkers("Let me know. ⟦ASK⟧Which database engine?||Postgres||MySQL"),
-  "Let me know. \n\nWhich database engine?",
-  "Strips unclosed ASK tag"
-);
-
-// Test 4: ARTIFACT marker with title
-assertEqual(
-  stripServerMarkers("Here is your script:\n\n⟦ARTIFACT:type=code;lang=python;title=Sieve of Eratosthenes⟧\ndef sieve(n):\n    pass\n⟦/ARTIFACT⟧\nDone!"),
-  "Here is your script:\n\n### Sieve of Eratosthenes\n\ndef sieve(n):\n    pass\n\nDone!",
-  "Strips ARTIFACT marker and formats title"
-);
-
-console.log("All marker tests passed!");
+  it("strips ARTIFACT marker and formats title", () => {
+    expect(
+      stripServerMarkers("Here is your script:\n\n⟦ARTIFACT:type=code;lang=python;title=Sieve of Eratosthenes⟧\ndef sieve(n):\n    pass\n⟦/ARTIFACT⟧\nDone!").trim()
+    ).toBe("Here is your script:\n\n### Sieve of Eratosthenes\n\ndef sieve(n):\n    pass\n\nDone!");
+  });
+});
