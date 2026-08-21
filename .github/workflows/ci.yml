@@ -14,6 +14,11 @@ jobs:
         with:
           node-version: 20
       - run: npm install
+      # canvas.ts and markers.ts are pure and covered by real vitest suites now
+      # (src/*.test.ts) — run them before the build, so a regression fails here
+      # instead of in someone's vault. They existed for a while without this
+      # step wired in, which meant nothing actually ran them.
+      - run: npm test -- --run
       # `build` runs `tsc --noEmit` before bundling, so a type error fails here
       # rather than in someone's vault. esbuild alone would happily bundle it.
       - run: npm run build

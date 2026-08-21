@@ -34,5 +34,10 @@ one decision.
 |---------|---------|
 | `npm run dev` | esbuild in watch mode |
 | `npm run build` | Typecheck (`tsc --noEmit`) then bundle |
+| `npm test` | Run the vitest suites (`src/*.test.ts`), watch mode |
 
-There are no tests yet. `src/canvas.ts` is pure and is where they should start.
+`src/canvas.ts` and `src/markers.ts` are pure and have real vitest coverage
+(`canvas.test.ts`, `markers.test.ts`) — CI runs `npm test -- --run` before the
+build. Anything else pure (`src/models.ts`) is a good next place to add tests;
+`src/view.ts` and the providers touch the DOM/network and would need mocking
+to be worth it.
