@@ -34,28 +34,76 @@
 	font-family: var(--font-text);
 }
 
-/* Wraps, because the right sidebar is narrow by default and a row of buttons
-   that overflows it is a row of buttons you cannot press. */
-.cymose-actions {
+/* The compose bar: model choice (compact, grows to fill) and Send/Stop
+   (fixed, pinned right) — the one row that reads as "primary", directly under
+   the box you typed into. Wraps on a narrow sidebar rather than clipping. */
+.cymose-compose-bar {
 	display: flex;
-	flex-wrap: wrap;
+	align-items: center;
+	justify-content: space-between;
 	gap: 8px;
+	flex-wrap: wrap;
 }
 
-/* The answer as it streams. Flexed so it takes the leftover height instead of
-   growing the panel past the window. */
+.cymose-model-select {
+	flex: 1;
+	min-width: 0;
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+}
+
+.cymose-compose-actions {
+	display: flex;
+	gap: 6px;
+	flex-shrink: 0;
+}
+
+/* Real actions, deliberately a visual step quieter than the compose bar — a
+   hairline divider plus smaller, muted, borderless buttons, so the panel has
+   one obvious next move (Send) instead of six equally-weighted buttons. */
+.cymose-secondary-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 2px;
+	padding-top: 8px;
+	border-top: 1px solid var(--background-modifier-border);
+}
+
+.cymose-ghost-btn {
+	background: transparent;
+	border: none;
+	box-shadow: none;
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	padding: 4px 8px;
+	height: auto;
+}
+
+.cymose-ghost-btn:hover {
+	background: var(--background-modifier-hover);
+	color: var(--text-normal);
+}
+
+/* The answer as it streams, rendered as real markdown (see markdown-rendered
+   on the element itself for the typography). Flexed so it takes the leftover
+   height instead of growing the panel past the window. */
 .cymose-preview {
 	flex: 1;
 	min-height: 80px;
 	overflow-y: auto;
-	white-space: pre-wrap;
+	overflow-x: hidden;
 	padding: 8px 10px;
 	border: 1px solid var(--background-modifier-border);
 	border-radius: 6px;
 	background: var(--background-secondary);
-	color: var(--text-normal);
 	font-size: var(--font-ui-small);
-	line-height: 1.5;
+}
+
+/* markdown-rendered's own paragraph/heading margins assume a full note; in
+   this compact box the first block's top margin just adds dead space under a
+   border that already separates it from the compose bar. */
+.cymose-preview > :first-child {
+	margin-top: 0;
 }
 
 .cymose-notice {

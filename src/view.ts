@@ -1,4 +1,4 @@
-import { App, FuzzySuggestModal, ItemView, Notice, TFile, WorkspaceLeaf } from "obsidian";
+import { App, FuzzySuggestModal, ItemView, MarkdownRenderer, Notice, TFile, WorkspaceLeaf } from "obsidian";
 import {
 	CanvasData,
 	CanvasNode,
@@ -89,6 +89,18 @@ export class CymoseView extends ItemView {
 	// decide whether to keep the partial and stop rather than carry on.
 	private abort: AbortController | null = null;
 	private stopped = false;
+	// Coalesces calls to MarkdownRenderer.render on the preview element. A
+	// render is real async work (post-processors, embeds) — firing one per
+	// stream chunk without this would let renders overlap and a later chunk's
+	// call finish before an earlier one's, painting stale text back over fresh
+	// text. Every caller of flushPreview() gets back the SAME in-flight
+	// promise and setting `previewDirty` before returning it guarantees at
+	// least one more pass reads the now-current `this.streamed` before the
+	// loop can exit — so every await genuinely waits for a render that
+	// reflects what was true at the moment of the call, not a stale one.
+	private previewRenderPromise: Promise<void> | null = null;
+	private previewDirty = false;
+	private previewPrefix = "";
 
 	private parentSelect!: HTMLSelectElement;
 	private modelSelect!: HTMLSelectElement;
@@ -151,22 +163,15 @@ export class CymoseView extends ItemView {
 
 		this.status = root.createDiv({ cls: "cymose-status" });
 
+		// The one thing every turn genuinely needs decided up front: which node
+		// it hangs off. Stays a full labeled row — it is a structural decision
+		// in a branching tool, not a preference to tuck away.
 		const parentRow = root.createDiv({ cls: "cymose-field" });
 		parentRow.createEl("label", { text: "Branch from" });
 		this.parentSelect = parentRow.createEl("select", { cls: "dropdown" });
 		this.parentSelect.onchange = () => {
 			this.parentId = this.parentSelect.value || null;
 		};
-
-		// Model per turn — the thing a branching tool is for. Pick a cheap model
-		// to sketch a branch, a strong one to promote it; ask the same question
-		// three ways on three different models. It lives here, not only in
-		// settings, because choosing it is the act, not a preference you set once.
-		const modelRow = root.createDiv({ cls: "cymose-field" });
-		modelRow.createEl("label", { text: "Model" });
-		this.modelSelect = modelRow.createEl("select", { cls: "dropdown" });
-		this.modelSelect.onchange = () => void this.chooseModel(this.modelSelect.value);
-		this.populateModels();
 
 		const promptRow = root.createDiv({ cls: "cymose-field" });
 		promptRow.createEl("label", { text: "Message" });
@@ -185,34 +190,55 @@ export class CymoseView extends ItemView {
 			}
 		});
 
-		const actions = root.createDiv({ cls: "cymose-actions" });
-		this.sendButton = actions.createEl("button", { cls: "mod-cta", text: "Send" });
+		// The compose bar: model choice and Send/Stop, right where the turn is
+		// actually sent from — a property of THIS message, not a setting to dig
+		// for above the box. Compact, unlabeled select (title/aria-label carry
+		// the meaning) rather than its own full row: picking a model per turn is
+		// the thing a branching tool is for, but it shouldn't outweigh the box
+		// you're about to type into.
+		const composeBar = root.createDiv({ cls: "cymose-compose-bar" });
+		this.modelSelect = composeBar.createEl("select", { cls: "dropdown cymose-model-select" });
+		this.modelSelect.title = "Model for this turn";
+		this.modelSelect.setAttr("aria-label", "Model for this turn");
+		this.modelSelect.onchange = () => void this.chooseModel(this.modelSelect.value);
+		this.populateModels();
+
+		const composeActions = composeBar.createDiv({ cls: "cymose-compose-actions" });
+		this.sendButton = composeActions.createEl("button", { cls: "mod-cta", text: "Send" });
 		this.sendButton.onclick = () => void this.send();
 
 		// Cancels the open stream. Hidden until a turn is running, so the row
 		// isn't cluttered with a button that does nothing most of the time.
-		this.stopButton = actions.createEl("button", { cls: "mod-warning", text: "Stop" });
+		this.stopButton = composeActions.createEl("button", { cls: "mod-warning", text: "Stop" });
 		this.stopButton.title = "Stop the answer. What already streamed is kept.";
 		this.stopButton.onclick = () => this.abort?.abort();
 		this.stopButton.hide();
 
-		this.exploreButton = actions.createEl("button", { text: "Explore 3 ways" });
+		// Real actions, but not things you do every turn — a visual step below
+		// the compose bar (smaller, muted, behind a hairline divider) so the
+		// panel has one obvious next move instead of six equally-weighted
+		// buttons competing for the same glance.
+		const secondary = root.createDiv({ cls: "cymose-secondary-actions" });
+		this.exploreButton = secondary.createEl("button", { cls: "cymose-ghost-btn", text: "Explore 3 ways" });
 		this.exploreButton.title = "Ask this once per strategy — three branches off the same question.";
 		this.exploreButton.onclick = () => void this.explore();
 
-		const branchActions = root.createDiv({ cls: "cymose-actions" });
-		this.promoteButton = branchActions.createEl("button", { text: "Promote" });
+		this.promoteButton = secondary.createEl("button", { cls: "cymose-ghost-btn", text: "Promote" });
 		this.promoteButton.title = "Summarise this branch into the node it forked from, so later branches inherit it.";
 		this.promoteButton.onclick = () => void this.promote();
 
-		this.pinButton = branchActions.createEl("button", { text: "Pin a note" });
+		this.pinButton = secondary.createEl("button", { cls: "cymose-ghost-btn", text: "Pin a note" });
 		this.pinButton.title = "Embed a note in this node. Every branch below it reads the note.";
 		this.pinButton.onclick = () => void this.pinNote();
 
-		const newButton = branchActions.createEl("button", { text: "New conversation" });
+		const newButton = secondary.createEl("button", { cls: "cymose-ghost-btn", text: "New conversation" });
 		newButton.onclick = () => void this.plugin.newConversation();
 
-		this.preview = root.createDiv({ cls: "cymose-preview" });
+		// markdown-rendered: Obsidian's own class for rendered-markdown typography
+		// (headings, code fences, lists, checkboxes) — the same styling every
+		// note's reading view gets, so a streamed answer looks native rather than
+		// like a plugin's homemade text box.
+		this.preview = root.createDiv({ cls: "cymose-preview markdown-rendered" });
 	}
 
 	/** Points the panel at whatever canvas is in front, if any. */
@@ -382,17 +408,49 @@ export class CymoseView extends ItemView {
 	}
 
 	/**
+	 * Renders the live preview as actual markdown, not raw text.
+	 *
+	 * Obsidian is a markdown-native app — asterisks and backticks sitting
+	 * literally on screen while an answer streams reads as unfinished, and
+	 * disagrees with how the same text looks a moment later once it's written
+	 * into the canvas node (which Obsidian renders normally). Always reads
+	 * `this.streamed` live rather than taking the text as a parameter, so the
+	 * dirty-flag redraw below can never paint something stale.
+	 */
+	private flushPreview(): Promise<void> {
+		this.previewDirty = true;
+		if (!this.previewRenderPromise) {
+			this.previewRenderPromise = this.runPreviewRenderLoop();
+		}
+		return this.previewRenderPromise;
+	}
+
+	private async runPreviewRenderLoop(): Promise<void> {
+		while (this.previewDirty) {
+			this.previewDirty = false;
+			const text = this.previewPrefix + stripServerMarkers(this.streamed);
+			this.preview.empty();
+			await MarkdownRenderer.render(this.app, text, this.preview, "", this);
+			this.preview.scrollTop = this.preview.scrollHeight;
+			// If flushPreview() was called again while the render above was in
+			// flight, previewDirty is true again here — loop once more, reading
+			// `this.streamed` fresh rather than returning already a chunk behind.
+		}
+		this.previewRenderPromise = null;
+	}
+
+	/**
 	 * Streams one answer into the panel and hands it back.
 	 *
 	 * Written to the canvas by the caller, once, at the end. Rewriting the file
-	 * on every chunk would mean a disk write and a canvas re-render several times
-	 * a second, which is how you make an editor feel broken — and the live text
-	 * is right here in the panel while it arrives.
+	 * on every chunk would mean a disk write and a canvas re-render several
+	 * times a second, which is how you make an editor feel broken — and the
+	 * live text is right here in the panel while it arrives.
 	 */
 	private async streamTurn(messages: Message[], heading: string, model: string): Promise<string> {
-		const prefix = heading ? `${heading}\n\n` : "";
+		this.previewPrefix = heading ? `${heading}\n\n` : "";
 		this.streamed = "";
-		this.preview.setText(prefix);
+		await this.flushPreview();
 		const controller = new AbortController();
 		this.abort = controller;
 		try {
@@ -402,8 +460,10 @@ export class CymoseView extends ItemView {
 				maxTokens: this.plugin.settings.maxTokens,
 			}, controller.signal)) {
 				this.streamed += chunk;
-				this.preview.setText(prefix + stripServerMarkers(this.streamed));
-				this.preview.scrollTop = this.preview.scrollHeight;
+				// Fire-and-forget: flushPreview's own in-flight guard coalesces any
+				// chunks that arrive faster than markdown rendering keeps up with,
+				// so this never queues unbounded work or races itself.
+				void this.flushPreview();
 			}
 		} catch (error) {
 			// Stop pressed: keep what streamed and let the caller write it, rather
@@ -417,6 +477,9 @@ export class CymoseView extends ItemView {
 		} finally {
 			this.abort = null;
 		}
+		// Settle on the final, complete text — a fire-and-forget flush from the
+		// last chunk may still be catching up.
+		await this.flushPreview();
 		return stripServerMarkers(this.streamed).trim();
 	}
 
