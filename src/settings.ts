@@ -187,10 +187,16 @@ export class CymoseSettingTab extends PluginSettingTab {
 				text
 					.setPlaceholder("sk-or-v1-…")
 					.setValue(this.plugin.settings.apiKey)
-					.onChange(async (value) => {
-						this.plugin.settings.apiKey = value.trim();
-						await this.plugin.saveSettings();
-					});
+				.onChange(async (value) => {
+					this.plugin.settings.apiKey = value.trim();
+					// Switching to BYOK while a Cymose-hosted model is selected would
+					// make the first request fail. Move to a known OpenRouter model so
+					// changing credentials is immediately usable.
+					if (this.plugin.settings.apiKey && !this.plugin.settings.cymoseToken.trim() && isCymoseHostedModel(this.plugin.settings.model)) {
+						this.plugin.settings.model = FALLBACK_MODEL_IDS[0];
+					}
+					await this.plugin.saveSettings();
+				});
 			});
 
 		this.modelSetting(containerEl);

@@ -74,10 +74,6 @@ export default class CymosePlugin extends Plugin {
 		// the panel tab both ask for it by id.
 		addIcon(CYMOSE_ICON, CYMOSE_ICON_SVG);
 
-		// Register the logo before anything references it — the ribbon button and
-		// the panel tab both ask for it by id.
-		addIcon(CYMOSE_ICON, CYMOSE_ICON_SVG);
-
 		this.registerView(VIEW_TYPE, (leaf) => new CymoseView(leaf, this));
 		this.addSettingTab(new CymoseSettingTab(this.app, this));
 
