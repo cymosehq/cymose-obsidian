@@ -1,4 +1,5 @@
 import { normalizePath, TFile, Vault } from "obsidian";
+import { stripServerMarkers } from "./markers";
 
 // The conversation is a real Obsidian canvas file.
 //
@@ -80,6 +81,20 @@ export async function writeCanvas(vault: Vault, file: TFile, data: CanvasData): 
 	// Two-space JSON, like Obsidian writes it: the file stays diffable in git,
 	// which matters for anyone keeping a vault in version control.
 	await vault.modify(file, JSON.stringify(data, null, 2));
+}
+
+/** Strip server streaming markers from every text node. Returns true if anything changed. */
+export function sanitizeCanvasMarkers(data: CanvasData): boolean {
+	let changed = false;
+	for (const node of data.nodes) {
+		if (node.type !== "text" || !node.text?.includes("⟦")) continue;
+		const cleaned = stripServerMarkers(node.text);
+		if (cleaned === node.text) continue;
+		node.text = cleaned;
+		node.height = estimateHeight(cleaned);
+		changed = true;
+	}
+	return changed;
 }
 
 export async function createCanvas(vault: Vault, folder: string, name: string): Promise<TFile> {

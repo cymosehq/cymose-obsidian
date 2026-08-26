@@ -18,6 +18,7 @@ import {
 	textForModel,
 	withModelTag,
 	setPromoted,
+	sanitizeCanvasMarkers,
 	CanvasNode
 } from "./canvas";
 
@@ -150,5 +151,12 @@ describe("Canvas Text Formatting", () => {
 		expect(node.text).toContain("Another solution.");
 		expect(node.text).toContain("<!-- cymose:promoted:b1 -->");
 		expect(node.text).toContain("<!-- cymose:promoted:b2 -->");
+	});
+
+	it("sanitizeCanvasMarkers strips control tokens from text nodes", () => {
+		const data = emptyCanvas();
+		const node = appendNode(data, null, "Hello ⟦SWITCH:model⟧ world ⟦TRUNCATED⟧", "5");
+		expect(sanitizeCanvasMarkers(data)).toBe(true);
+		expect(node.text).toBe("Hello  world ");
 	});
 });

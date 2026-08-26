@@ -12,6 +12,7 @@ import {
 	label,
 	leaves,
 	readCanvas,
+	sanitizeCanvasMarkers,
 	setPromoted,
 	textForModel,
 	withModelTag,
@@ -264,6 +265,9 @@ export class CymoseView extends ItemView {
 		if (!this.file) return;
 		try {
 			this.data = await readCanvas(this.app.vault, this.file);
+			if (sanitizeCanvasMarkers(this.data)) {
+				await writeCanvas(this.app.vault, this.file, this.data);
+			}
 		} catch (error) {
 			this.setStatus((error as Error).message);
 			return;
