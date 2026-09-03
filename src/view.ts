@@ -150,6 +150,8 @@ export class CymoseView extends ItemView {
 	private pinButton!: HTMLButtonElement;
 	private preview!: HTMLElement;
 	private status!: HTMLElement;
+	private activity!: HTMLElement;
+	private errorBox!: HTMLElement;
 
 	constructor(
 		leaf: WorkspaceLeaf,
@@ -208,7 +210,17 @@ export class CymoseView extends ItemView {
 		root.empty();
 		root.addClass("cymose-panel");
 
+		// Three different things used to share one line of muted text: which
+		// canvas you are on, what is happening right now, and what went wrong.
+		// They have different lifetimes, so they get different homes — the
+		// symptom of merging them was that an error appeared for as long as it
+		// took the next reload to overwrite it, which is to say not long enough
+		// to read.
 		this.status = root.createDiv({ cls: "cymose-status" });
+		this.activity = root.createDiv({ cls: "cymose-activity" });
+		this.activity.hide();
+		this.errorBox = root.createDiv({ cls: "cymose-error" });
+		this.errorBox.hide();
 
 		// The one thing every turn genuinely needs decided up front: which node
 		// it hangs off. A readout of what you already pointed at, not a control
@@ -238,13 +250,29 @@ export class CymoseView extends ItemView {
 		promptRow.createEl("label", { text: "Message" });
 		this.prompt = promptRow.createEl("textarea", { cls: "cymose-prompt" });
 		this.prompt.rows = 6;
-		this.prompt.placeholder = "Ask something. It becomes a node under the one you picked.";
+		this.prompt.placeholder =
+			"Ask something. It becomes a node under the one you're branching from.\n\nEnter sends · ⌘/Ctrl+Enter explores three ways · Esc stops";
 		// registerDomEvent, not addEventListener: Obsidian unregisters it with the
 		// view. Relying on the element being torn down works today and is the
 		// first thing a plugin reviewer asks about.
 		this.registerDomEvent(this.prompt, "keydown", (event) => {
-			// Enter sends, shift+enter breaks the line — the convention every
-			// chat box in the world uses, and the one people try first.
+			// Escape stops a running turn. The Stop button is a few centimetres
+			// away and the hand is already on the keyboard; the moment you want
+			// to stop an answer is not the moment to go looking for a mouse.
+			if (event.key === "Escape" && this.abort) {
+				event.preventDefault();
+				this.abort.abort();
+				return;
+			}
+			// Ctrl/Cmd+Enter explores. Enter sends, shift+enter breaks the line —
+			// the convention every chat box in the world uses, and the one people
+			// try first. Explore is the same gesture with the modifier that means
+			// "and more of it", which is what three branches are.
+			if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+				event.preventDefault();
+				void this.explore();
+				return;
+			}
 			if (event.key === "Enter" && !event.shiftKey) {
 				event.preventDefault();
 				void this.send();
@@ -329,7 +357,7 @@ export class CymoseView extends ItemView {
 				await writeCanvas(this.app.vault, this.file, this.data);
 			}
 		} catch (error) {
-			this.setStatus((error as Error).message);
+			this.showError((error as Error).message);
 			return;
 		}
 		this.canvasReadable = canvasBridgeWorks(this.app);
@@ -520,14 +548,59 @@ export class CymoseView extends ItemView {
 		return this.plugin.settings.modelCatalogue.find((m) => m.id === id)?.label ?? id;
 	}
 
+	/** Which canvas the panel is pointed at. Ambient; survives everything. */
 	private setStatus(text: string): void {
 		this.status.setText(text);
+	}
+
+	/**
+	 * What is happening right now, and how far through it we are.
+	 *
+	 * Shown only while something is running, so an idle panel isn't carrying a
+	 * stale sentence about a turn that finished ten minutes ago.
+	 */
+	private setActivity(text: string | null): void {
+		if (!text) {
+			this.activity.hide();
+			this.activity.setText("");
+			return;
+		}
+		this.activity.setText(text);
+		this.activity.show();
+	}
+
+	/**
+	 * What went wrong, until you say you've read it.
+	 *
+	 * A Notice is gone in eight seconds and the status line was overwritten by
+	 * the reload that followed the failure — so the panel's account of why a
+	 * turn failed reliably outlived neither. This one stays until it is
+	 * dismissed or the next turn starts, which is the only lifetime that
+	 * matches how long the information is useful for.
+	 */
+	private showError(message: string): void {
+		this.errorBox.empty();
+		this.errorBox.createDiv({ cls: "cymose-error-text", text: message });
+		const dismiss = this.errorBox.createEl("button", {
+			cls: "cymose-ghost-btn cymose-error-dismiss",
+			text: "Dismiss",
+		});
+		dismiss.onclick = () => this.clearError();
+		this.errorBox.show();
+	}
+
+	private clearError(): void {
+		this.errorBox.empty();
+		this.errorBox.hide();
 	}
 
 	/** Everything that writes or spends runs one at a time, and the panel says so. */
 	private begin(busyLabel: string): void {
 		this.sending = true;
 		this.stopped = false;
+		// The last failure is about the last turn. Starting a new one answers it.
+		this.clearError();
+		this.setActivity(busyLabel);
 		this.sendButton.setText(busyLabel);
 		for (const button of [this.sendButton, this.exploreButton, this.promoteButton, this.pinButton]) {
 			button.disabled = true;
@@ -538,6 +611,7 @@ export class CymoseView extends ItemView {
 
 	private end(): void {
 		this.sending = false;
+		this.setActivity(null);
 		this.sendButton.setText("Send");
 		for (const button of [this.sendButton, this.exploreButton, this.promoteButton, this.pinButton]) {
 			button.disabled = false;
@@ -563,7 +637,7 @@ export class CymoseView extends ItemView {
 	private fail(error: unknown): void {
 		const message = error instanceof ProviderError ? error.friendly : (error as Error).message;
 		new Notice(`Cymose: ${message}`, 8000);
-		this.setStatus(message);
+		this.showError(message);
 	}
 
 	/**
@@ -838,6 +912,7 @@ export class CymoseView extends ItemView {
 				// one preview box in turn, each wiping out the last, so the
 				// comparison this feature exists for was impossible to watch and
 				// only assembled itself once everything had finished.
+				this.setActivity(`${index + 1} of ${STRATEGIES.length} · ${strategy.label}`);
 				const caption = `_${strategy.label}_\n\n`;
 				this.data = await readCanvas(this.app.vault, file);
 				const branch = appendNode(this.data, question.id, caption + STREAM_PLACEHOLDER, COLOR_ASSISTANT);

@@ -13,6 +13,35 @@
 	font-size: var(--font-ui-smaller);
 }
 
+/* What is happening right now. Only on screen while it is happening, so the
+   panel never carries a stale sentence about a turn that finished long ago. */
+.cymose-activity {
+	color: var(--text-accent);
+	font-size: var(--font-ui-smaller);
+}
+
+/* What went wrong, until you say you have read it. A block rather than a line,
+   because a provider error is often a sentence and a half and truncating the
+   half that says what to do about it is the whole problem. */
+.cymose-error {
+	display: flex;
+	align-items: flex-start;
+	gap: 8px;
+	padding: 8px 10px;
+	border: 1px solid var(--background-modifier-error);
+	border-radius: 6px;
+	background: var(--background-modifier-error-hover);
+	color: var(--text-error);
+	font-size: var(--font-ui-smaller);
+}
+
+.cymose-error-text { flex: 1; min-width: 0; }
+
+.cymose-error-dismiss {
+	flex-shrink: 0;
+	color: var(--text-error);
+}
+
 .cymose-field {
 	display: flex;
 	flex-direction: column;
@@ -139,7 +168,7 @@
    height instead of growing the panel past the window. */
 .cymose-preview {
 	flex: 1;
-	min-height: 80px;
+	min-height: 160px;
 	overflow-y: auto;
 	overflow-x: hidden;
 	padding: 8px 10px;

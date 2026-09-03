@@ -113,13 +113,49 @@ export async function createCanvas(vault: Vault, folder: string, name: string): 
 	return vault.create(path, JSON.stringify(emptyCanvas(), null, 2));
 }
 
+/** Two node rectangles overlap if they are closer than one gap apart. */
+function collides(
+	candidate: { x: number; y: number; width: number; height: number },
+	node: CanvasNode,
+): boolean {
+	return (
+		candidate.x < node.x + node.width + COLUMN_GAP / 2 &&
+		candidate.x + candidate.width + COLUMN_GAP / 2 > node.x &&
+		candidate.y < node.y + node.height + ROW_GAP / 2 &&
+		candidate.y + candidate.height + ROW_GAP / 2 > node.y
+	);
+}
+
+/**
+ * The first free x at or to the right of `x`, on row `y`.
+ *
+ * Counting siblings is enough to keep a node off its own sibling and nothing
+ * else. It is not enough on any canvas with two conversations on it, or one
+ * deep branch whose descendants have drifted under the next branch along —
+ * where the answer landed on top of an unrelated node and the user's first
+ * experience of branching was cleaning up. So the row is swept for a gap.
+ *
+ * Bounded, because an unbounded loop over someone's canvas is a hang: past a
+ * couple of hundred columns the honest answer is "out there somewhere on the
+ * right", which is at least visible and draggable.
+ */
+function freeSpot(data: CanvasData, x: number, y: number, width: number, height: number): number {
+	let cursor = x;
+	for (let step = 0; step < 200; step += 1) {
+		const candidate = { x: cursor, y, width, height };
+		if (!data.nodes.some((node) => collides(candidate, node))) return cursor;
+		cursor += NODE_WIDTH + COLUMN_GAP;
+	}
+	return cursor;
+}
+
 /**
  * Appends a node under `parentId` and wires the edge.
  *
  * Placement is the only layout logic here: directly below the parent, shifted
- * right for each sibling that already exists. Enough that a branch doesn't
- * land on top of its sibling, and no more — the user will drag things where
- * they want them, and Obsidian remembers.
+ * right past each sibling and then past anything else already sitting on that
+ * row. Enough that nothing lands on top of anything, and no more — the user
+ * will drag things where they want them, and Obsidian remembers.
  */
 export function appendNode(
 	data: CanvasData,
@@ -130,14 +166,18 @@ export function appendNode(
 	const parent = parentId ? data.nodes.find((n) => n.id === parentId) ?? null : null;
 	const siblings = parentId ? data.edges.filter((e) => e.fromNode === parentId).length : data.nodes.filter((n) => !data.edges.some((e) => e.toNode === n.id)).length;
 
+	const height = estimateHeight(text);
+	const y = parent ? parent.y + parent.height + ROW_GAP : 0;
+	const wanted = (parent ? parent.x : 0) + siblings * (NODE_WIDTH + COLUMN_GAP);
+
 	const node: CanvasNode = {
 		id: newId(),
 		type: "text",
 		text,
-		x: parent ? parent.x + siblings * (NODE_WIDTH + COLUMN_GAP) : siblings * (NODE_WIDTH + COLUMN_GAP),
-		y: parent ? parent.y + parent.height + ROW_GAP : 0,
+		x: freeSpot(data, wanted, y, NODE_WIDTH, height),
+		y,
 		width: NODE_WIDTH,
-		height: estimateHeight(text),
+		height,
 		color,
 	};
 	data.nodes.push(node);

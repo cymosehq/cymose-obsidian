@@ -40,6 +40,46 @@ describe("Canvas Layout & Utils", () => {
 	});
 });
 
+describe("appendNode placement", () => {
+	it("never lands a node on top of one that is already there", () => {
+		const data = emptyCanvas();
+		const root = appendNode(data, null, "Root", "6");
+		// Three children of one node: the fork this product exists to make.
+		const kids = [
+			appendNode(data, root.id, "one", "5"),
+			appendNode(data, root.id, "two", "5"),
+			appendNode(data, root.id, "three", "5"),
+		];
+		const xs = kids.map((k) => k.x);
+		expect(new Set(xs).size).toBe(3);
+		expect(xs).toEqual([...xs].sort((a, b) => a - b));
+	});
+
+	it("steps clear of an unrelated node sitting where the new one would go", () => {
+		const data = emptyCanvas();
+		const root = appendNode(data, null, "Root", "6");
+		const row = root.y + root.height + 80; // ROW_GAP
+
+		// Something already occupying the spot directly under the root — another
+		// conversation on the same canvas, or a node the user dragged there.
+		data.nodes.push({
+			id: "squatter",
+			type: "text",
+			x: root.x,
+			y: row,
+			width: 420,
+			height: 120,
+			text: "in the way",
+		});
+
+		const child = appendNode(data, root.id, "child", "5");
+		expect(child.y).toBe(row);
+		// Not on top of it: either clear to the right, or clear to the left.
+		const clear = child.x >= 420 + root.x || child.x + 420 <= root.x;
+		expect(clear).toBe(true);
+	});
+});
+
 describe("removeNode", () => {
 	it("takes the node and every edge touching it", () => {
 		const data = emptyCanvas();
