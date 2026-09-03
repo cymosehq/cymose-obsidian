@@ -13,9 +13,15 @@ one decision.
 - **Provider-specific code stops at `src/providers/`.** Auth, request shape and
   stream dialect live behind `ModelAdapter`; nothing above it learns which
   vendor answered.
-- **No private Obsidian APIs.** Canvas selection is not exposed publicly, which
-  is why the panel has a parent picker instead of reading what's selected.
-  Reaching into internals buys a small convenience and breaks on a release.
+- **Private Obsidian APIs only through `src/canvas-api.ts`, guarded.** Canvas
+  selection is not exposed publicly. This rule used to say "never", and the
+  price was the product's central gesture: you pointed at a node on the canvas
+  and the panel made you find it again in a list. So we reach in, under three
+  conditions — every access feature-detected and wrapped so nothing throws, a
+  fallback path that still works when the bridge reports nothing, and reads
+  only (canvas *data* is still written through the `.canvas` file). One file
+  knows the shape of someone else's internals; a bad Obsidian release costs a
+  convenience, not the plugin. Anywhere else, the answer is still no.
 - **The key goes to the provider and nowhere else.** No telemetry, no
   analytics, no "anonymous" usage ping. Ever.
 - **0.1 is BYOK.** Cymose Web sync is a later milestone; don't wire client code
@@ -24,8 +30,11 @@ one decision.
 ## Layout
 
 - `src/canvas.ts` — read/write JSON Canvas, ancestry, layout. No network.
+- `src/canvas-api.ts` — the guarded bridge to the live canvas view: what is
+  selected, and revealing a node. The only file allowed to know Obsidian's
+  internals.
 - `src/providers/` — `ModelAdapter` and its implementations.
-- `src/view.ts` — the panel: pick a parent, send, stream.
+- `src/view.ts` — the panel: what you are branching from, send, stream.
 - `src/main.ts` — plugin lifecycle, commands.
 
 ## Commands

@@ -1,7 +1,6 @@
 import { App, FuzzySuggestModal, ItemView, MarkdownRenderer, Notice, TFile, WorkspaceLeaf } from "obsidian";
 import {
 	CanvasData,
-	CanvasNode,
 	COLOR_ASSISTANT,
 	COLOR_USER,
 	appendNode,
@@ -18,6 +17,7 @@ import {
 	withModelTag,
 	writeCanvas,
 } from "./canvas";
+import { canvasBridgeWorks, revealNode, selectedNodeId } from "./canvas-api";
 import { Message, ProviderError } from "./providers/types";
 import { FALLBACK_MODEL_IDS, describe, groupByTier } from "./models";
 import { CYMOSE_ICON } from "./main";
@@ -73,16 +73,29 @@ export const VIEW_TYPE = "cymose-panel";
 // The panel you talk to. The canvas is the conversation; this is the place you
 // choose where to speak from.
 //
-// Picking the parent explicitly, rather than reading the canvas selection, is
-// deliberate: Obsidian exposes no public API for what's selected on a canvas,
-// and reaching into internals means the plugin breaks on an Obsidian release
-// for no benefit the user asked for. A dropdown that defaults to the last node
-// costs one click and never breaks — and it makes branching visible, which is
-// the thing people are here for.
+// What you speak from is whatever you selected on the canvas. That is the one
+// gesture this product exists for — see a node, branch from it — and for a long
+// time this panel could not do it: Obsidian publishes no canvas selection API,
+// so the panel asked you to find the node a second time in a dropdown of every
+// node in the conversation. The principle was right about the risk and wrong
+// about the price. `canvas-api.ts` now reads the selection, guarded, and when
+// it reports nothing the explicit picker below is still here and still works.
 export class CymoseView extends ItemView {
 	private file: TFile | null = null;
 	private data: CanvasData = { nodes: [], edges: [] };
 	private parentId: string | null = null;
+	// The last canvas selection we adopted. Lets the poll tell a genuine change
+	// of mind from the same node merely still being selected — and stops a
+	// manual pick being overwritten a moment later by the selection it replaced.
+	private lastSeenSelection: string | null = null;
+	// Where the shown target came from. Said out loud in the panel: a tool that
+	// silently retargets itself is worse than one that makes you point twice.
+	private targetFromCanvas = false;
+	// Whether reading the canvas selection works on this Obsidian. Re-checked on
+	// every reload rather than once at load: the answer depends on which view is
+	// in front, and a plugin that decided this at startup would be wrong the
+	// first time you opened a canvas.
+	private canvasReadable = false;
 	private sending = false;
 	private streamed = "";
 	// The in-flight turn's canceller, and whether the user pressed Stop. `abort`
@@ -103,7 +116,8 @@ export class CymoseView extends ItemView {
 	private previewDirty = false;
 	private previewPrefix = "";
 
-	private parentSelect!: HTMLSelectElement;
+	private targetButton!: HTMLButtonElement;
+	private targetOrigin!: HTMLElement;
 	private modelSelect!: HTMLSelectElement;
 	private prompt!: HTMLTextAreaElement;
 	private sendButton!: HTMLButtonElement;
@@ -151,6 +165,15 @@ export class CymoseView extends ItemView {
 			}),
 		);
 
+		// There is no canvas selection event, so the panel looks. Twice a second,
+		// only while this view exists (registerInterval ties it to the view's
+		// lifetime), and the work is reading a handful of string ids.
+		this.registerInterval(
+			window.setInterval(() => {
+				if (!this.sending) this.syncSelection();
+			}, 500),
+		);
+
 		// Fetch catalogue silently. If updated, repopulate the dropdown.
 		void this.plugin.refreshCatalogue().then((updated) => {
 			if (updated) this.populateModels();
@@ -165,14 +188,28 @@ export class CymoseView extends ItemView {
 		this.status = root.createDiv({ cls: "cymose-status" });
 
 		// The one thing every turn genuinely needs decided up front: which node
-		// it hangs off. Stays a full labeled row — it is a structural decision
-		// in a branching tool, not a preference to tuck away.
-		const parentRow = root.createDiv({ cls: "cymose-field" });
-		parentRow.createEl("label", { text: "Branch from" });
-		this.parentSelect = parentRow.createEl("select", { cls: "dropdown" });
-		this.parentSelect.onchange = () => {
-			this.parentId = this.parentSelect.value || null;
-		};
+		// it hangs off. A readout of what you already pointed at, not a control
+		// you operate — the pointing happened on the canvas. It stays a full
+		// labeled row because it is a structural decision in a branching tool,
+		// and it stays clickable in both directions: the node name reveals that
+		// node on the canvas, "Change" picks a different one without leaving
+		// the keyboard.
+		const targetRow = root.createDiv({ cls: "cymose-field cymose-target" });
+		const targetHead = targetRow.createDiv({ cls: "cymose-target-head" });
+		targetHead.createEl("label", { text: "Branch from" });
+		this.targetOrigin = targetHead.createSpan({ cls: "cymose-target-origin" });
+
+		const targetControls = targetRow.createDiv({ cls: "cymose-target-controls" });
+		this.targetButton = targetControls.createEl("button", { cls: "cymose-target-node" });
+		this.targetButton.title = "Show this node on the canvas";
+		this.targetButton.onclick = () => this.revealTarget();
+
+		const changeButton = targetControls.createEl("button", {
+			cls: "cymose-ghost-btn cymose-target-change",
+			text: "Change",
+		});
+		changeButton.title = "Point at a different node without hunting for it on the canvas";
+		changeButton.onclick = () => this.pickTarget();
 
 		const promptRow = root.createDiv({ cls: "cymose-field" });
 		promptRow.createEl("label", { text: "Message" });
@@ -272,7 +309,9 @@ export class CymoseView extends ItemView {
 			this.setStatus((error as Error).message);
 			return;
 		}
-		this.refreshParents();
+		this.canvasReadable = canvasBridgeWorks(this.app);
+		this.ensureTarget();
+		this.syncSelection();
 		// A catalogue fetched by the settings tab after this panel was built only
 		// reaches the picker on a reload — cheap to rebuild, and it keeps the
 		// shown model in step with settings if it was changed there.
@@ -281,36 +320,129 @@ export class CymoseView extends ItemView {
 	}
 
 	/**
-	 * Rebuilds the parent picker.
+	 * Adopts the canvas selection, if it changed since we last looked.
 	 *
-	 * Leaves come first and one is preselected: continuing the conversation is
-	 * what you want nine times out of ten, and branching from the middle is the
-	 * deliberate act that deserves the extra scroll.
+	 * Polled rather than subscribed, because there is no selection event to
+	 * subscribe to. It is a set of string ids read a few times a second while
+	 * the panel is open — cheap enough to be beneath notice, and the only way
+	 * to make clicking a node mean something.
+	 *
+	 * Deselecting is not an instruction. Clicking empty canvas clears the
+	 * selection constantly and never means "forget what I was answering"; so a
+	 * selection that goes away leaves the target where it was.
 	 */
-	private refreshParents(): void {
-		const previous = this.parentId;
-		this.parentSelect.empty();
+	private syncSelection(): void {
+		const selected = selectedNodeId(this.app);
+		if (!selected || selected === this.lastSeenSelection) return;
+		this.lastSeenSelection = selected;
+		// A node from a canvas we aren't attached to isn't ours to branch from.
+		if (!this.data.nodes.some((n) => n.id === selected)) return;
+		this.parentId = selected;
+		this.targetFromCanvas = true;
+		this.renderTarget();
+	}
 
+	/**
+	 * Points the panel at `id`, from an explicit act rather than the canvas.
+	 *
+	 * Records it as seen, so the poll doesn't hand the target straight back to
+	 * whatever is still highlighted on the canvas.
+	 */
+	setTarget(id: string | null, fromCanvas = false): void {
+		this.parentId = id;
+		this.targetFromCanvas = fromCanvas;
+		if (id) this.lastSeenSelection = id;
+		this.renderTarget();
+	}
+
+	/**
+	 * Chooses the target when nothing on the canvas says what it is.
+	 *
+	 * Leaves come first: continuing the conversation is what you want nine times
+	 * out of ten, and branching from the middle is the deliberate act. This is
+	 * the same list the old dropdown held, but fuzzy-searchable — which is the
+	 * difference between usable and unusable once a conversation has forty
+	 * nodes in it.
+	 */
+	private ensureTarget(): void {
 		if (this.data.nodes.length === 0) {
-			this.parentSelect.createEl("option", { value: "", text: "Start of the conversation" });
 			this.parentId = null;
+			this.targetFromCanvas = false;
+			this.renderTarget();
 			return;
 		}
+		if (this.parentId && this.data.nodes.some((n) => n.id === this.parentId)) {
+			this.renderTarget();
+			return;
+		}
+		const ends = leaves(this.data);
+		this.parentId = ends[ends.length - 1]?.id ?? null;
+		this.targetFromCanvas = false;
+		this.renderTarget();
+	}
 
+	/** The target, as the panel says it. */
+	private renderTarget(): void {
+		const node = this.parentId ? this.data.nodes.find((n) => n.id === this.parentId) : null;
+		if (!node) {
+			this.targetButton.setText(this.data.nodes.length ? "— new root —" : "Start of the conversation");
+			this.targetButton.removeClass("cymose-target-node--set");
+			this.targetOrigin.setText("");
+			return;
+		}
+		const isLeaf = !this.data.edges.some((e) => e.fromNode === node.id);
+		this.targetButton.setText(`${isLeaf ? "→" : "⑂"} ${label(node, 48)}`);
+		this.targetButton.addClass("cymose-target-node--set");
+		// Says which way the target got here, so "why is it answering that node"
+		// is never a question you have to reverse-engineer.
+		if (this.targetFromCanvas) {
+			this.targetOrigin.setText("selected on canvas");
+		} else if (!this.canvasReadable) {
+			// The guarded bridge found nothing it recognised. Say so once, here,
+			// instead of leaving people clicking nodes and wondering why the
+			// panel ignores them.
+			this.targetOrigin.setText("pick it here — this Obsidian won't tell us what's selected");
+		} else {
+			this.targetOrigin.setText(isLeaf ? "end of the conversation" : "picked");
+		}
+	}
+
+	/** Puts the cursor where the next thing you type goes. Called by the canvas
+	 *  menu, which has just answered "from where" and left only "what". */
+	focusPrompt(): void {
+		this.prompt.focus();
+	}
+
+	/** Selects the target node on the canvas and brings it into view. */
+	private revealTarget(): void {
+		if (!this.parentId) {
+			this.pickTarget();
+			return;
+		}
+		if (!revealNode(this.app, this.parentId)) {
+			new Notice("Cymose: couldn't reach the canvas — open it in the main pane.");
+		}
+	}
+
+	/** The picker: every node, fuzzy-matched, plus starting a new root. */
+	private pickTarget(): void {
+		if (!this.data.nodes.length) {
+			new Notice("Cymose: this conversation is empty — just type and send.");
+			return;
+		}
 		const ends = leaves(this.data);
 		const endIds = new Set(ends.map((n) => n.id));
-		const rest = this.data.nodes.filter((n) => !endIds.has(n.id));
-
-		const addOption = (node: CanvasNode, prefix: string) => {
-			this.parentSelect.createEl("option", { value: node.id, text: `${prefix}${label(node)}` });
-		};
-		for (const node of ends) addOption(node, "→ ");
-		for (const node of rest) addOption(node, "⑂ ");
-		this.parentSelect.createEl("option", { value: "", text: "— new root —" });
-
-		const stillThere = previous && this.data.nodes.some((n) => n.id === previous);
-		this.parentId = stillThere ? previous : (ends[ends.length - 1]?.id ?? null);
-		this.parentSelect.value = this.parentId ?? "";
+		const choices: TargetChoice[] = [
+			...ends.map((node) => ({ id: node.id, text: `→ ${label(node, 80)}` })),
+			...this.data.nodes
+				.filter((n) => !endIds.has(n.id))
+				.map((node) => ({ id: node.id, text: `⑂ ${label(node, 80)}` })),
+			{ id: null, text: "— new root —" },
+		];
+		new TargetPicker(this.app, choices, (choice) => {
+			this.setTarget(choice.id);
+			if (choice.id) revealNode(this.app, choice.id);
+		}).open();
 	}
 
 	/**
@@ -527,9 +659,11 @@ export class CymoseView extends ItemView {
 
 			this.prompt.value = "";
 			await this.reload();
-			// Continue from the answer, which is where the next question goes.
-			this.parentId = node.id;
-			this.parentSelect.value = node.id;
+			// Continue from the answer, which is where the next question goes —
+			// and select it on the canvas, so the panel and the board agree about
+			// where you are without you having to go and find the new node.
+			this.setTarget(node.id);
+			revealNode(this.app, node.id);
 		} catch (error) {
 			// The question node stays. It cost nothing, it records what was asked,
 			// and deleting it would also delete whatever the user typed.
@@ -601,11 +735,11 @@ export class CymoseView extends ItemView {
 
 			this.prompt.value = "";
 			await this.reload();
-			// Leave the picker on the question: the next thing you do is compare
-			// the three, and anything you ask next belongs beside them, not under
-			// whichever one happened to finish last.
-			this.parentId = question.id;
-			this.parentSelect.value = question.id;
+			// Stay on the question: the next thing you do is compare the three,
+			// and anything you ask next belongs beside them, not under whichever
+			// one happened to finish last.
+			this.setTarget(question.id);
+			revealNode(this.app, question.id);
 			if (written) {
 				new Notice(`Cymose: ${written} branch${written === 1 ? "" : "es"} off that question.`);
 			}
@@ -628,7 +762,7 @@ export class CymoseView extends ItemView {
 	async promote(): Promise<void> {
 		const tipId = this.parentId;
 		if (!tipId) {
-			new Notice("Cymose: pick the branch to promote in “Branch from”.");
+			new Notice("Cymose: select the tip of the branch you want promoted.");
 			return;
 		}
 		if (!(await this.ready())) return;
@@ -714,7 +848,7 @@ export class CymoseView extends ItemView {
 		if (this.sending) return;
 		const nodeId = this.parentId;
 		if (!this.file || !nodeId) {
-			new Notice("Cymose: pick the node to pin a note to in “Branch from”.");
+			new Notice("Cymose: select the node you want the note pinned to.");
 			return;
 		}
 		const file = this.file;
@@ -836,6 +970,40 @@ export class CymoseView extends ItemView {
 			);
 		}
 		return out;
+	}
+}
+
+/** One entry in the target picker. A null id means "start a new root". */
+type TargetChoice = { id: string | null; text: string };
+
+/**
+ * Which node to branch from, when the canvas isn't answering that.
+ *
+ * A modal rather than the dropdown this replaced, for one reason: it is
+ * fuzzy-searchable. The dropdown listed every node in the conversation with no
+ * way to find one, which was fine at ten nodes and useless at forty — and forty
+ * nodes is what a tool built for branching produces in an afternoon.
+ */
+class TargetPicker extends FuzzySuggestModal<TargetChoice> {
+	constructor(
+		app: App,
+		private choices: TargetChoice[],
+		private onPick: (choice: TargetChoice) => void,
+	) {
+		super(app);
+		this.setPlaceholder("Branch from which node?");
+	}
+
+	getItems(): TargetChoice[] {
+		return this.choices;
+	}
+
+	getItemText(choice: TargetChoice): string {
+		return choice.text;
+	}
+
+	onChooseItem(choice: TargetChoice): void {
+		this.onPick(choice);
 	}
 }
 

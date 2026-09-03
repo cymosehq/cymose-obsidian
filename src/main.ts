@@ -1,4 +1,15 @@
-import { addIcon, App, FuzzySuggestModal, Notice, Plugin, requestUrl, TFile, WorkspaceLeaf } from "obsidian";
+import {
+	addIcon,
+	App,
+	EventRef,
+	FuzzySuggestModal,
+	Menu,
+	Notice,
+	Plugin,
+	requestUrl,
+	TFile,
+	WorkspaceLeaf,
+} from "obsidian";
 import { CymoseSettingTab, CymoseSettings, DEFAULT_SETTINGS } from "./settings";
 import { CymoseAdapter } from "./providers/cymose";
 import { OpenRouterAdapter } from "./providers/openrouter";
@@ -112,6 +123,8 @@ export default class CymosePlugin extends Plugin {
 			name: "Pin a note to the selected node",
 			callback: () => void this.inPanel((view) => view.pinNote()),
 		});
+		this.registerCanvasMenu();
+
 		this.addCommand({
 			id: "conversation-from-note",
 			name: "Start a conversation about this note",
@@ -126,6 +139,72 @@ export default class CymosePlugin extends Plugin {
 
 	onunload(): void {
 		// Leaves are Obsidian's to clean up; nothing of ours outlives the app.
+	}
+
+	/**
+	 * Cymose on the canvas's own right-click menu.
+	 *
+	 * The idiom Obsidian users already have for "do something to this thing",
+	 * and the natural home for every action this plugin has, because all of them
+	 * are about one node. Before this, right-clicking a node offered nothing and
+	 * the panel asked you to name the node again in a list — the gesture people
+	 * try first did nothing, which is the worst answer a UI can give.
+	 *
+	 * `canvas:node-menu` isn't in the published typings. It is dispatched
+	 * through `Events`, whose `on(name: string, …)` overload is public API;
+	 * `Workspace` merely shadows it with named ones. So the widening below is a
+	 * claim about the event's payload, not a reach into internals — and a
+	 * payload that turns out differently costs a menu item, not a crash.
+	 */
+	private registerCanvasMenu(): void {
+		const workspace = this.app.workspace as App["workspace"] & {
+			on(
+				name: "canvas:node-menu",
+				callback: (menu: Menu, node: { id?: unknown }) => void,
+			): EventRef;
+		};
+
+		this.registerEvent(
+			workspace.on("canvas:node-menu", (menu, node) => {
+				const id = typeof node?.id === "string" ? node.id : null;
+				if (!id) return;
+
+				const act = (action: (view: CymoseView) => void | Promise<void>) =>
+					void this.inPanel(async (view) => {
+						// The menu already said which node. Telling the panel is the
+						// whole point: every one of these used to open with "now go
+						// and pick the node you just right-clicked".
+						view.setTarget(id, true);
+						await action(view);
+					});
+
+				menu.addSeparator();
+				menu.addItem((item) =>
+					item
+						.setTitle("Branch from here")
+						.setIcon(CYMOSE_ICON)
+						.onClick(() => act((view) => view.focusPrompt())),
+				);
+				menu.addItem((item) =>
+					item
+						.setTitle("Explore 3 ways from here")
+						.setIcon(CYMOSE_ICON)
+						.onClick(() => act((view) => view.explore())),
+				);
+				menu.addItem((item) =>
+					item
+						.setTitle("Promote this branch")
+						.setIcon(CYMOSE_ICON)
+						.onClick(() => act((view) => view.promote())),
+				);
+				menu.addItem((item) =>
+					item
+						.setTitle("Pin a note here")
+						.setIcon(CYMOSE_ICON)
+						.onClick(() => act((view) => view.pinNote())),
+				);
+			}),
+		);
 	}
 
 	/**

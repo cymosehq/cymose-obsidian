@@ -29,6 +29,56 @@
 	width: 100%;
 }
 
+/* What this turn hangs off. A readout of a decision already made on the canvas,
+   not a control you operate — so it reads as a statement with an escape hatch,
+   rather than as the sixth dropdown in a form. */
+.cymose-target-head {
+	display: flex;
+	align-items: baseline;
+	justify-content: space-between;
+	gap: 8px;
+}
+
+.cymose-target-origin {
+	color: var(--text-faint);
+	font-size: var(--font-ui-smaller);
+	text-align: right;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.cymose-target-controls {
+	display: flex;
+	align-items: stretch;
+	gap: 4px;
+}
+
+/* The node itself: full width, left-aligned and truncated like a filename,
+   because it is one — a name you read, click to go to, and rarely retype. */
+.cymose-target-node {
+	flex: 1;
+	min-width: 0;
+	justify-content: flex-start;
+	text-align: left;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	background: var(--background-secondary);
+	color: var(--text-muted);
+	font-size: var(--font-ui-small);
+}
+
+.cymose-target-node--set { color: var(--text-normal); }
+
+.cymose-target-node:hover {
+	background: var(--background-modifier-hover);
+	color: var(--text-normal);
+}
+
+.cymose-target-change { flex-shrink: 0; }
+
 .cymose-prompt {
 	resize: vertical;
 	font-family: var(--font-text);
