@@ -10,6 +10,7 @@ import {
 	newId,
 	emptyCanvas,
 	appendNode,
+	removeNode,
 	ancestry,
 	leaves,
 	childrenOf,
@@ -36,6 +37,30 @@ describe("Canvas Layout & Utils", () => {
 		const id = newId();
 		expect(id).toMatch(/^[0-9a-f]{16}$/);
 		expect(id).not.toBe(newId());
+	});
+});
+
+describe("removeNode", () => {
+	it("takes the node and every edge touching it", () => {
+		const data = emptyCanvas();
+		const root = appendNode(data, null, "Root", "6");
+		const answer = appendNode(data, root.id, "…", "5");
+		const child = appendNode(data, answer.id, "Follow-up", "6");
+
+		removeNode(data, answer.id);
+
+		expect(data.nodes.map((n) => n.id)).toEqual([root.id, child.id]);
+		// Both sides: the edge down from the parent AND the one on to the child.
+		// Leaving either behind is an edge pointing at nothing.
+		expect(data.edges).toHaveLength(0);
+	});
+
+	it("is a no-op for a node that isn't there", () => {
+		const data = emptyCanvas();
+		const root = appendNode(data, null, "Root", "6");
+		removeNode(data, "nope");
+		expect(data.nodes).toHaveLength(1);
+		expect(data.nodes[0].id).toBe(root.id);
 	});
 });
 

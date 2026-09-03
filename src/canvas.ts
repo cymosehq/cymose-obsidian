@@ -155,6 +155,23 @@ export function appendNode(
 }
 
 /**
+ * Removes a node and every edge touching it.
+ *
+ * Used to take back a placeholder we put there ourselves: the answer node is
+ * created empty so you can watch it fill, which means a turn that dies before
+ * a word arrives has to clean up after itself rather than leave an empty box
+ * on the canvas for someone to delete by hand.
+ *
+ * Edges on both sides go, not just the one from the parent — a hand-edited
+ * canvas can point anywhere, and leaving an edge to a node that no longer
+ * exists is a file Obsidian has to be forgiving about.
+ */
+export function removeNode(data: CanvasData, nodeId: string): void {
+	data.nodes = data.nodes.filter((n) => n.id !== nodeId);
+	data.edges = data.edges.filter((e) => e.fromNode !== nodeId && e.toNode !== nodeId);
+}
+
+/**
  * The chain from a node up to its root, oldest first.
  *
  * This is the context a turn is sent with, and the reason branching works

@@ -11,6 +11,7 @@ import {
 	label,
 	leaves,
 	readCanvas,
+	removeNode,
 	sanitizeCanvasMarkers,
 	setPromoted,
 	textForModel,
@@ -50,6 +51,18 @@ const STRATEGIES = [
 	},
 ];
 
+/**
+ * How often a streaming answer is written to its node on the canvas.
+ *
+ * Not once per chunk — that is a disk write and a canvas re-render several
+ * times a second, which is how you make an editor feel broken. Twice a second
+ * reads as live and Obsidian never notices.
+ */
+const CANVAS_FLUSH_MS = 500;
+
+/** What an answer node says before the first words of it arrive. */
+const STREAM_PLACEHOLDER = "…";
+
 /** How much of one pinned note is worth sending. Beyond this it is a document,
  *  not context, and it crowds out the conversation it was meant to inform. */
 const MAX_NOTE_CHARS = 8000;
@@ -67,6 +80,16 @@ const PROMOTE_PROMPT =
 	"so that branches opened later at the same point inherit it. At most five short lines. State " +
 	"what was decided, what was ruled out, and why, as plain facts. Do not restate the question, " +
 	"do not hedge, do not add a heading or a preamble.";
+
+/**
+ * Where a streaming answer goes while it streams.
+ *
+ * `push` is called with the whole text so far and drops most of them on the
+ * floor; `settle` waits for the last write it actually started, so the final
+ * text written after the stream can never be overtaken by a frame from the
+ * middle of it.
+ */
+type StreamSink = { push: (partial: string) => void; settle: () => Promise<void> };
 
 export const VIEW_TYPE = "cymose-panel";
 
@@ -576,14 +599,77 @@ export class CymoseView extends ItemView {
 	}
 
 	/**
-	 * Streams one answer into the panel and hands it back.
+	 * Applies a change to the canvas file, re-reading it first.
 	 *
-	 * Written to the canvas by the caller, once, at the end. Rewriting the file
-	 * on every chunk would mean a disk write and a canvas re-render several
-	 * times a second, which is how you make an editor feel broken — and the
-	 * live text is right here in the panel while it arrives.
+	 * The re-read is what lets a turn run for thirty seconds without eating an
+	 * edit someone made elsewhere on the board in the meantime: we write back a
+	 * file we just looked at, with one node changed, rather than the copy the
+	 * panel happened to be holding.
 	 */
-	private async streamTurn(messages: Message[], heading: string, model: string): Promise<string> {
+	private async patchCanvas(file: TFile, change: (data: CanvasData) => void): Promise<void> {
+		const data = await readCanvas(this.app.vault, file);
+		change(data);
+		await writeCanvas(this.app.vault, file, data);
+	}
+
+	/** Sets one node's text and re-fits its height to it. */
+	private async writeNodeText(file: TFile, nodeId: string, text: string): Promise<void> {
+		await this.patchCanvas(file, (data) => {
+			const node = data.nodes.find((n) => n.id === nodeId);
+			if (!node) return;
+			node.text = text;
+			node.height = estimateHeight(text);
+		});
+	}
+
+	/**
+	 * A sink that writes the answer into its node on the canvas as it arrives.
+	 *
+	 * This is the change that makes the canvas the place the conversation
+	 * happens rather than the place it is filed afterwards. It used to stream
+	 * into a box in the sidebar and land as a node somewhere on the board when
+	 * it was over — one thing in two places, and you had to go and find it.
+	 *
+	 * A dropped intermediate frame costs nothing: the final text is written
+	 * unconditionally when the stream ends, so a failed write here is worth
+	 * swallowing rather than interrupting an answer over.
+	 */
+	private canvasSink(file: TFile, nodeId: string, prefix = ""): StreamSink {
+		let inFlight: Promise<void> = Promise.resolve();
+		let busy = false;
+		let last = 0;
+		return {
+			push: (partial) => {
+				const now = Date.now();
+				if (busy || now - last < CANVAS_FLUSH_MS) return;
+				busy = true;
+				last = now;
+				const body = stripServerMarkers(partial).trim();
+				inFlight = this.writeNodeText(file, nodeId, prefix + (body || STREAM_PLACEHOLDER))
+					.catch(() => undefined)
+					.then(() => {
+						busy = false;
+					});
+			},
+			settle: () => inFlight,
+		};
+	}
+
+	/**
+	 * Streams one answer, into its node on the canvas and into the panel's
+	 * preview at the same time, and hands the finished text back.
+	 *
+	 * The preview is the reading copy — wide markdown, scrollable, and it does
+	 * not move under you the way a growing canvas node does. The node is where
+	 * the answer actually lives. Both show the same text at the same time,
+	 * which is the point: nothing lands anywhere you weren't watching.
+	 */
+	private async streamTurn(
+		messages: Message[],
+		heading: string,
+		model: string,
+		sink?: StreamSink,
+	): Promise<string> {
 		this.previewPrefix = heading ? `${heading}\n\n` : "";
 		this.streamed = "";
 		await this.flushPreview();
@@ -600,6 +686,7 @@ export class CymoseView extends ItemView {
 				// chunks that arrive faster than markdown rendering keeps up with,
 				// so this never queues unbounded work or races itself.
 				void this.flushPreview();
+				sink?.push(this.streamed);
 			}
 		} catch (error) {
 			// Stop pressed: keep what streamed and let the caller write it, rather
@@ -614,12 +701,15 @@ export class CymoseView extends ItemView {
 			this.abort = null;
 		}
 		// Settle on the final, complete text — a fire-and-forget flush from the
-		// last chunk may still be catching up.
+		// last chunk may still be catching up, in the preview and on the canvas
+		// both. Waiting for the canvas one is what stops a frame from the middle
+		// of the stream landing on top of the final text the caller writes next.
 		await this.flushPreview();
+		await sink?.settle();
 		return stripServerMarkers(this.streamed).trim();
 	}
 
-	/** One turn: write the question, stream the answer, then write it. */
+	/** One turn: write the question, open the answer node, stream into it. */
 	private async send(): Promise<void> {
 		const text = this.prompt.value.trim();
 		if (!text) return;
@@ -630,20 +720,38 @@ export class CymoseView extends ItemView {
 		// Fixed for the whole turn, so the caption names the model that actually
 		// answered even if the picker is changed while the answer streams.
 		const usedModel = this.plugin.settings.model;
+		// Declared out here so the catch below knows whether there is a
+		// half-written node on the canvas to salvage or take back.
+		let answerId: string | null = null;
 		this.begin("Sending…");
 		try {
 			// Re-read before writing: the file may have changed since the panel
 			// last looked, and appending to a stale copy would drop those nodes.
 			this.data = await readCanvas(this.app.vault, file);
 			const question = appendNode(this.data, this.parentId, text, COLOR_USER);
+			// The answer node exists before a word of it does. The board used to
+			// sit still for as long as the model took and then grow a node
+			// somewhere you had to go and find; now the place the answer will
+			// live is visible from the moment you press Send, and fills up in
+			// front of you.
+			const answerNode = appendNode(this.data, question.id, STREAM_PLACEHOLDER, COLOR_ASSISTANT);
+			answerId = answerNode.id;
 			await writeCanvas(this.app.vault, file, this.data);
+			revealNode(this.app, answerNode.id);
 
-			const streamed = await this.streamTurn(await this.buildMessages(question.id), "", usedModel);
+			// Built from the question, so the empty answer node just created is not
+			// in the chain — ancestry walks upwards.
+			const messages = await this.buildMessages(question.id);
+			const streamed = await this.streamTurn(messages, "", usedModel, this.canvasSink(file, answerNode.id));
+
 			if (this.stopped && !streamed) {
-				// Cut short before a word arrived: the question stays, but writing an
-				// empty answer node would just be litter to delete.
+				// Cut short before a word arrived: the question stays, but the
+				// placeholder is ours and an empty node is litter, so we take it
+				// back rather than leave it to be deleted by hand.
+				await this.patchCanvas(file, (data) => removeNode(data, answerNode.id));
 				new Notice("Cymose: stopped. Your question is on the canvas.");
 				await this.reload();
+				this.setTarget(question.id);
 				return;
 			}
 			// Tag real answers with the model; leave the "nothing came back"
@@ -651,10 +759,7 @@ export class CymoseView extends ItemView {
 			const answer = streamed
 				? withModelTag(streamed, this.modelLabel(usedModel))
 				: "_(the model returned nothing)_";
-
-			this.data = await readCanvas(this.app.vault, file);
-			const node = appendNode(this.data, question.id, answer, COLOR_ASSISTANT);
-			await writeCanvas(this.app.vault, file, this.data);
+			await this.writeNodeText(file, answerNode.id, answer);
 			if (this.stopped) new Notice("Cymose: stopped — kept the partial answer.");
 
 			this.prompt.value = "";
@@ -662,14 +767,39 @@ export class CymoseView extends ItemView {
 			// Continue from the answer, which is where the next question goes —
 			// and select it on the canvas, so the panel and the board agree about
 			// where you are without you having to go and find the new node.
-			this.setTarget(node.id);
-			revealNode(this.app, node.id);
+			this.setTarget(answerNode.id);
+			revealNode(this.app, answerNode.id);
 		} catch (error) {
 			// The question node stays. It cost nothing, it records what was asked,
-			// and deleting it would also delete whatever the user typed.
+			// and deleting it would also delete whatever the user typed. The
+			// answer node only stays if there is an answer in it.
 			this.fail(error);
+			if (answerId) await this.salvage(file, answerId, usedModel);
+			await this.reload();
 		} finally {
 			this.end();
+		}
+	}
+
+	/**
+	 * What to do with an answer node whose turn died mid-flight.
+	 *
+	 * Whatever streamed before the failure is kept — it is often the useful
+	 * half, and it is the part the user watched arrive, so deleting it would be
+	 * taking away something they had already read. Nothing streamed means the
+	 * node is a placeholder we put there and nobody wants, so it goes.
+	 */
+	private async salvage(file: TFile, nodeId: string, model: string): Promise<void> {
+		const partial = stripServerMarkers(this.streamed).trim();
+		try {
+			if (partial) {
+				await this.writeNodeText(file, nodeId, withModelTag(partial, this.modelLabel(model)));
+			} else {
+				await this.patchCanvas(file, (data) => removeNode(data, nodeId));
+			}
+		} catch {
+			// Already failing. A second error here would replace a useful message
+			// about why the turn died with a useless one about tidying up.
 		}
 	}
 
@@ -702,31 +832,41 @@ export class CymoseView extends ItemView {
 			let written = 0;
 
 			for (const [index, strategy] of STRATEGIES.entries()) {
+				// Each branch is drawn before it is answered, so the fork appears
+				// on the canvas as it is being explored. This is the fix that
+				// matters most here: all three answers used to stream through the
+				// one preview box in turn, each wiping out the last, so the
+				// comparison this feature exists for was impossible to watch and
+				// only assembled itself once everything had finished.
+				const caption = `_${strategy.label}_\n\n`;
+				this.data = await readCanvas(this.app.vault, file);
+				const branch = appendNode(this.data, question.id, caption + STREAM_PLACEHOLDER, COLOR_ASSISTANT);
+				await writeCanvas(this.app.vault, file, this.data);
+				revealNode(this.app, branch.id);
+
 				let answer: string;
 				try {
 					answer = await this.streamTurn(
 						this.withNudge(base, strategy.nudge),
 						`${index + 1}/${STRATEGIES.length} · ${strategy.label}`,
 						usedModel,
+						this.canvasSink(file, branch.id, caption),
 					);
 				} catch (error) {
 					// One strategy failing is no reason to throw away the ones that
 					// worked. A rate limit halfway through costs you a branch, not
 					// the exploration.
 					this.fail(error);
+					await this.salvage(file, branch.id, usedModel);
 					break;
 				}
 				if (answer) {
-					this.data = await readCanvas(this.app.vault, file);
-					const node = appendNode(
-						this.data,
-						question.id,
-						withModelTag(`_${strategy.label}_\n\n${answer}`, this.modelLabel(usedModel)),
-						COLOR_ASSISTANT,
-					);
-					node.height = estimateHeight(node.text ?? "");
-					await writeCanvas(this.app.vault, file, this.data);
+					await this.writeNodeText(file, branch.id, withModelTag(caption + answer, this.modelLabel(usedModel)));
 					written += 1;
+				} else {
+					// Nothing came back for this strategy: take the placeholder back
+					// rather than leave an empty branch that looks like an answer.
+					await this.patchCanvas(file, (data) => removeNode(data, branch.id));
 				}
 				// Stop ends the whole exploration, not just this strategy — the
 				// branches already written stay, the ones not yet asked don't run.
