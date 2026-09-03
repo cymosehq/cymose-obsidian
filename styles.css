@@ -163,6 +163,16 @@
 	color: var(--text-normal);
 }
 
+/* What the pane below is showing. Small and muted: it is a label on a surface
+   whose content changes job between "the node you're pointed at" and "the
+   answer arriving", and unlabelled that switch reads as the panel losing your
+   place. */
+.cymose-preview-caption {
+	color: var(--text-faint);
+	font-size: var(--font-ui-smaller);
+	margin-bottom: -6px;
+}
+
 /* The answer as it streams, rendered as real markdown (see markdown-rendered
    on the element itself for the typography). Flexed so it takes the leftover
    height instead of growing the panel past the window. */

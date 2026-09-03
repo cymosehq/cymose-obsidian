@@ -138,6 +138,13 @@ export class CymoseView extends ItemView {
 	private previewRenderPromise: Promise<void> | null = null;
 	private previewDirty = false;
 	private previewPrefix = "";
+	// Renders of the target node, one at a time. MarkdownRenderer.render is real
+	// async work that appends as it goes, so two of them overlapping paints one
+	// node's text into the middle of another's. `previewGeneration` lets a job
+	// that has been overtaken skip its own work rather than draw something the
+	// user has already navigated away from.
+	private previewJob: Promise<void> = Promise.resolve();
+	private previewGeneration = 0;
 
 	private targetButton!: HTMLButtonElement;
 	private targetOrigin!: HTMLElement;
@@ -148,6 +155,7 @@ export class CymoseView extends ItemView {
 	private exploreButton!: HTMLButtonElement;
 	private promoteButton!: HTMLButtonElement;
 	private pinButton!: HTMLButtonElement;
+	private previewCaption!: HTMLElement;
 	private preview!: HTMLElement;
 	private status!: HTMLElement;
 	private activity!: HTMLElement;
@@ -323,6 +331,14 @@ export class CymoseView extends ItemView {
 		const newButton = secondary.createEl("button", { cls: "cymose-ghost-btn", text: "New conversation" });
 		newButton.onclick = () => void this.plugin.newConversation();
 
+		// The pane has one job, at rest and in flight both: show the node you are
+		// pointed at. While a turn runs, that node is the answer arriving — so
+		// the same text is briefly on the canvas and in here, which is the point
+		// rather than a duplication: the canvas node is 420px wide and clips at
+		// its height, and this scrolls and wraps. When nothing is running it is
+		// the reading copy of whatever you last selected, which is what makes it
+		// worth the space it takes when the panel is idle.
+		this.previewCaption = root.createDiv({ cls: "cymose-preview-caption" });
 		// markdown-rendered: Obsidian's own class for rendered-markdown typography
 		// (headings, code fences, lists, checkboxes) — the same styling every
 		// note's reading view gets, so a streamed answer looks native rather than
@@ -363,6 +379,7 @@ export class CymoseView extends ItemView {
 		this.canvasReadable = canvasBridgeWorks(this.app);
 		this.ensureTarget();
 		this.syncSelection();
+		void this.renderTargetPreview();
 		// A catalogue fetched by the settings tab after this panel was built only
 		// reaches the picker on a reload — cheap to rebuild, and it keeps the
 		// shown model in step with settings if it was changed there.
@@ -391,6 +408,7 @@ export class CymoseView extends ItemView {
 		this.parentId = selected;
 		this.targetFromCanvas = true;
 		this.renderTarget();
+		void this.renderTargetPreview();
 	}
 
 	/**
@@ -404,6 +422,7 @@ export class CymoseView extends ItemView {
 		this.targetFromCanvas = fromCanvas;
 		if (id) this.lastSeenSelection = id;
 		this.renderTarget();
+		void this.renderTargetPreview();
 	}
 
 	/**
@@ -456,6 +475,37 @@ export class CymoseView extends ItemView {
 		} else {
 			this.targetOrigin.setText(isLeaf ? "end of the conversation" : "picked");
 		}
+	}
+
+	/**
+	 * Shows the node you are pointed at, whole.
+	 *
+	 * Never while a turn is running: the streaming renderer owns the element
+	 * then, and two writers on one node is how you get a half-drawn answer with
+	 * a paragraph of the previous one still under it.
+	 */
+	private renderTargetPreview(): Promise<void> {
+		const generation = (this.previewGeneration += 1);
+		this.previewJob = this.previewJob
+			.catch(() => undefined)
+			.then(() => this.drawTargetPreview(generation));
+		return this.previewJob;
+	}
+
+	private async drawTargetPreview(generation: number): Promise<void> {
+		// Overtaken while queued, or a turn started in the meantime: the element
+		// belongs to someone else now.
+		if (generation !== this.previewGeneration || this.sending) return;
+		const node = this.parentId ? this.data.nodes.find((n) => n.id === this.parentId) : null;
+		const text = node?.text?.trim() ?? "";
+		this.previewCaption.setText(text ? "The node you're branching from" : "");
+		this.preview.empty();
+		if (!text) return;
+		// Server markers only; our own comment markers stay, because the promoted
+		// conclusions they wrap are exactly what you want to read here before
+		// deciding what to ask next.
+		await MarkdownRenderer.render(this.app, stripServerMarkers(text), this.preview, this.file?.path ?? "", this);
+		this.preview.scrollTop = 0;
 	}
 
 	/** Puts the cursor where the next thing you type goes. Called by the canvas
@@ -612,6 +662,9 @@ export class CymoseView extends ItemView {
 	private end(): void {
 		this.sending = false;
 		this.setActivity(null);
+		// The pane goes back to showing what you are pointed at — which, after a
+		// turn, is the answer that just landed.
+		void this.renderTargetPreview();
 		this.sendButton.setText("Send");
 		for (const button of [this.sendButton, this.exploreButton, this.promoteButton, this.pinButton]) {
 			button.disabled = false;
@@ -656,6 +709,11 @@ export class CymoseView extends ItemView {
 			this.previewRenderPromise = this.runPreviewRenderLoop();
 		}
 		return this.previewRenderPromise;
+	}
+
+	/** Caption for the streaming pane: what is arriving, not what is stored. */
+	private captionStream(text: string): void {
+		this.previewCaption.setText(text);
 	}
 
 	private async runPreviewRenderLoop(): Promise<void> {
@@ -745,6 +803,7 @@ export class CymoseView extends ItemView {
 		sink?: StreamSink,
 	): Promise<string> {
 		this.previewPrefix = heading ? `${heading}\n\n` : "";
+		this.captionStream(heading || "Arriving on the canvas now");
 		this.streamed = "";
 		await this.flushPreview();
 		const controller = new AbortController();
