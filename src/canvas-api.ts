@@ -65,20 +65,29 @@ function canvasOf(leaf: WorkspaceLeaf | null): InternalCanvas | null {
 	});
 }
 
-/** The canvas the user is looking at, if it is a canvas. */
+/**
+ * The canvas the user is looking at, if it is a canvas.
+ *
+ * Clicking in the side panel makes the panel the active leaf, so "active" alone
+ * would lose the canvas the moment you came over to type. `getMostRecentLeaf`
+ * is the one that still means "the document you are working in" after that —
+ * and only then do we fall back to any open canvas at all, which is right when
+ * exactly one is open and a guess when several are.
+ */
 function activeCanvas(app: App): InternalCanvas | null {
 	const direct = canvasOf(app.workspace.activeLeaf ?? null);
 	if (direct) return direct;
-	// The panel itself is often the active leaf — the canvas is then the most
-	// recent one in the main area, which is what the user still sees.
+
+	const recent = attempt(() => canvasOf(app.workspace.getMostRecentLeaf() ?? null));
+	if (recent) return recent;
+
 	return attempt(() => {
-		let found: InternalCanvas | null = null;
-		app.workspace.iterateAllLeaves((leaf) => {
-			if (found) return;
-			const canvas = canvasOf(leaf);
-			if (canvas) found = canvas;
-		});
-		return found;
+		const canvases = app.workspace.getLeavesOfType("canvas");
+		// Several open and none of them recent: any answer is a guess, and a
+		// wrong guess retargets the panel to a conversation the user isn't
+		// looking at. Say nothing instead; the picker still works.
+		if (canvases.length !== 1) return null;
+		return canvasOf(canvases[0]);
 	});
 }
 
@@ -118,13 +127,18 @@ export function selectedNodeId(app: App): string | null {
 }
 
 /**
- * Selects a node on the canvas and brings it into view.
+ * Selects a node on the canvas, and optionally moves the view to it.
  *
- * The other half of reading the selection: the panel can now answer "where did
- * that answer land?" by pointing at it, instead of leaving you to hunt.
+ * The two are deliberately separate. Moving the view is right when the user
+ * asked to be taken somewhere — they clicked the node's name in the panel, or
+ * picked it out of a list — and wrong every other time: a turn that zoomed the
+ * board to fill the screen with the node it had just created would throw away
+ * whatever the user had arranged in order to show them something that is
+ * already, by construction, just below what they were looking at.
+ *
  * Returns false when we couldn't — callers fall back to saying it in words.
  */
-export function revealNode(app: App, nodeId: string): boolean {
+function pointAt(app: App, nodeId: string, moveView: boolean): boolean {
 	const canvas = activeCanvas(app);
 	if (!canvas) return false;
 	return (
@@ -138,9 +152,19 @@ export function revealNode(app: App, nodeId: string): boolean {
 						: undefined;
 			if (!node || typeof canvas.selectOnly !== "function") return false;
 			canvas.selectOnly(node);
-			if (typeof canvas.zoomToSelection === "function") canvas.zoomToSelection();
+			if (moveView && typeof canvas.zoomToSelection === "function") canvas.zoomToSelection();
 			else if (typeof canvas.requestFrame === "function") canvas.requestFrame();
 			return true;
 		}) ?? false
 	);
+}
+
+/** Highlights a node where it already is. The board does not move. */
+export function selectNode(app: App, nodeId: string): boolean {
+	return pointAt(app, nodeId, false);
+}
+
+/** Takes the user to a node. Only ever from an explicit "show me that one". */
+export function revealNode(app: App, nodeId: string): boolean {
+	return pointAt(app, nodeId, true);
 }

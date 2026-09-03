@@ -18,7 +18,7 @@ import {
 	withModelTag,
 	writeCanvas,
 } from "./canvas";
-import { canvasBridgeWorks, revealNode, selectedNodeId } from "./canvas-api";
+import { canvasBridgeWorks, revealNode, selectNode, selectedNodeId } from "./canvas-api";
 import { Message, ProviderError } from "./providers/types";
 import { FALLBACK_MODEL_IDS, describe, groupByTier } from "./models";
 import { CYMOSE_ICON } from "./main";
@@ -453,6 +453,10 @@ export class CymoseView extends ItemView {
 
 	/** The target, as the panel says it. */
 	private renderTarget(): void {
+		// openFile() can arrive from the plugin before Obsidian has run onOpen on
+		// a freshly created leaf, and then there is no button to write into yet.
+		// The reload that follows onOpen draws it correctly.
+		if (!this.targetButton) return;
 		const node = this.parentId ? this.data.nodes.find((n) => n.id === this.parentId) : null;
 		if (!node) {
 			this.targetButton.setText(this.data.nodes.length ? "— new root —" : "Start of the conversation");
@@ -870,7 +874,10 @@ export class CymoseView extends ItemView {
 			const answerNode = appendNode(this.data, question.id, STREAM_PLACEHOLDER, COLOR_ASSISTANT);
 			answerId = answerNode.id;
 			await writeCanvas(this.app.vault, file, this.data);
-			revealNode(this.app, answerNode.id);
+			// Selected, not zoomed to: the node is by construction just below the
+			// one you were looking at, and rearranging the user's view of the
+			// board to show them that is a worse trade than a highlight.
+			selectNode(this.app, answerNode.id);
 
 			// Built from the question, so the empty answer node just created is not
 			// in the chain — ancestry walks upwards.
@@ -901,7 +908,7 @@ export class CymoseView extends ItemView {
 			// and select it on the canvas, so the panel and the board agree about
 			// where you are without you having to go and find the new node.
 			this.setTarget(answerNode.id);
-			revealNode(this.app, answerNode.id);
+			selectNode(this.app, answerNode.id);
 		} catch (error) {
 			// The question node stays. It cost nothing, it records what was asked,
 			// and deleting it would also delete whatever the user typed. The
@@ -976,7 +983,7 @@ export class CymoseView extends ItemView {
 				this.data = await readCanvas(this.app.vault, file);
 				const branch = appendNode(this.data, question.id, caption + STREAM_PLACEHOLDER, COLOR_ASSISTANT);
 				await writeCanvas(this.app.vault, file, this.data);
-				revealNode(this.app, branch.id);
+				selectNode(this.app, branch.id);
 
 				let answer: string;
 				try {
@@ -1013,7 +1020,7 @@ export class CymoseView extends ItemView {
 			// and anything you ask next belongs beside them, not under whichever
 			// one happened to finish last.
 			this.setTarget(question.id);
-			revealNode(this.app, question.id);
+			selectNode(this.app, question.id);
 			if (written) {
 				new Notice(`Cymose: ${written} branch${written === 1 ? "" : "es"} off that question.`);
 			}

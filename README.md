@@ -94,17 +94,21 @@ That one decision buys most of the product:
 2. Command palette → **Cymose: New conversation** (or **Start a conversation
    about this note**, which embeds the note in the first node so the canvas
    stays linked in your graph).
-3. Type in the panel, press Enter. Your message becomes a node; the answer
-   streams into the panel and lands as a node under it.
-4. To branch: change **Branch from** to any earlier node and ask something
-   else. The new line inherits that node's history, not its siblings'.
+3. Type in the panel, press Enter. Your message becomes a node, and the answer
+   node appears under it straight away and fills in front of you on the canvas.
+4. To branch: click any earlier node on the canvas, or right-click it and
+   choose **Branch from here**, then ask something else. The new line inherits
+   that node's history, not its siblings'. (If the panel can't read your
+   canvas selection, it says so and **Change** gives you a searchable list of
+   every node instead.)
 
 ### Explore 3 ways
 
-Type a question and press **Explore 3 ways** instead of Send. It asks three
+Type a question and press **Explore 3 ways** instead of Send (or ⌘/Ctrl+Enter). It asks three
 times with three different instructions — the straight answer, one that
 questions an assumption in the question, and one that goes for the option with
-the higher ceiling — and hangs all three under your question as siblings.
+the higher ceiling — and hangs all three under your question as siblings, each drawn on the canvas
+before it is answered so you watch the fork fill in.
 
 Not three samples at a high temperature. That gives three paraphrases of one
 idea, which is worth nothing to compare. Three different instructions give three
@@ -116,7 +120,8 @@ This is the half of branching that nobody else does. Forking is easy and every
 canvas has it; the problem is the way back up. A decision made three levels down
 stays down there, and the next branch you open re-litigates it.
 
-Select the end of a branch in **Branch from** and press **Promote**. The branch
+Select the end of a branch on the canvas and press **Promote** — or right-click
+that node and choose **Promote this branch**. The branch
 is compressed into what it settled — what was decided, what was ruled out, why —
 and that lands in the node the branch forked from, as a callout you can edit or
 delete by hand. Every branch you open there afterwards inherits it, because the
