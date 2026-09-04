@@ -14,8 +14,25 @@ import { requestUrl } from "obsidian";
 // where the catalogue can't be fetched: somebody using their own OpenRouter key
 // and no Cymose account, and a first run with no network.
 
-/** Catalogue format this build reads. Sent by the server as `version`. */
-export const CATALOGUE_VERSION = 1;
+/**
+ * Catalogue format this build was written against. Sent by the server as
+ * `version`.
+ *
+ * Advisory, not a gate. This used to be checked for equality and the fetch
+ * refused on any mismatch — which meant every server-side bump silently broke
+ * the model picker in every installed copy of the plugin, and did it in the
+ * worst way: `refreshCatalogue` swallows the error, so an account holder just
+ * quietly got the hardcoded OpenRouter fallback list instead of their tiers,
+ * with the free models missing entirely and nothing on screen to say why. It
+ * had already happened — this build read v1 while the API served v5.
+ *
+ * A plugin ships through a store and updates on the user's schedule; a version
+ * equality check hands the server a switch that bricks clients it cannot see.
+ * What the check was actually protecting against — showing "free" beside a
+ * model that costs ten credits — is protected properly below, by validating
+ * every entry we intend to display.
+ */
+export const CATALOGUE_VERSION = 6;
 
 export type ModelTier = "free" | "standard" | "premium";
 
@@ -81,20 +98,62 @@ export async function fetchCatalogue(baseUrl: string, token: string): Promise<Ca
 	if (response.status === 401) throw new CatalogueError("That access token was rejected.");
 	if (response.status >= 400) throw new CatalogueError(`Cymose returned ${response.status}.`);
 
-	const body = response.json as { version?: number; models?: CatalogueEntry[] };
-	if (!body || !Array.isArray(body.models)) throw new CatalogueError("Cymose sent something that isn't a catalogue.");
-
-	// A build that meets a format it doesn't know refuses rather than guesses.
-	// Mis-reading a tier would mean showing somebody "free" next to a model that
-	// costs ten credits, and they would find out by running out.
-	if (body.version !== CATALOGUE_VERSION) {
-		throw new CatalogueError(
-			`This plugin reads catalogue v${CATALOGUE_VERSION}; Cymose sent v${body.version}. Update the plugin.`,
-		);
-	}
-	return body.models;
+	return readCatalogue(response.json);
 }
 
+/**
+ * Turns whatever /v1/models answered into entries we can show, or says why not.
+ *
+ * Split from the fetch so the parsing contract — the part with the judgement
+ * in it — can be tested without a network or an Obsidian runtime.
+ *
+ * Entries are checked one at a time rather than trusted because a version
+ * number matched. An entry we can't read is dropped, not guessed at: the thing
+ * worth preventing is showing "free" next to a model that costs ten credits,
+ * and a reader that validates what it displays prevents that whatever version
+ * the server calls its format.
+ */
+export function readCatalogue(payload: unknown): CatalogueEntry[] {
+	const body = payload as { version?: number; models?: unknown[] } | null;
+	if (!body || !Array.isArray(body.models)) throw new CatalogueError("Cymose sent something that isn't a catalogue.");
+
+	const models = body.models.filter(isCatalogueEntry);
+	if (!models.length) {
+		throw new CatalogueError(
+			body.models.length
+				? "Cymose sent a catalogue this plugin can't read. Updating the plugin should fix it."
+				: "Cymose sent an empty catalogue.",
+		);
+	}
+	return models;
+}
+
+/**
+ * Is this something we can put in front of somebody and price correctly?
+ *
+ * Every field the picker renders or bills against has to be the right type. A
+ * newer server adding fields we don't know about is fine — extra keys are
+ * ignored, which is what lets an older plugin keep working across a format
+ * bump instead of falling back to a hardcoded list.
+ */
+function isCatalogueEntry(value: unknown): value is CatalogueEntry {
+	if (!value || typeof value !== "object") return false;
+	const entry = value as Record<string, unknown>;
+	return (
+		typeof entry.id === "string" &&
+		!!entry.id &&
+		typeof entry.label === "string" &&
+		typeof entry.maker === "string" &&
+		typeof entry.tier === "string" &&
+		(TIER_ORDER as string[]).includes(entry.tier) &&
+		typeof entry.credits === "number" &&
+		Number.isFinite(entry.credits)
+	);
+}
+
+// The tiers, in the order a picker shows them — and the set an entry's `tier`
+// has to be one of to be displayable at all. One list, so a tier added on the
+// server can never be validated here and then dropped when grouping.
 const TIER_ORDER: ModelTier[] = ["free", "standard", "premium"];
 
 const TIER_LABELS: Record<ModelTier, string> = {

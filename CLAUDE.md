@@ -45,8 +45,11 @@ one decision.
 | `npm run build` | Typecheck (`tsc --noEmit`) then bundle |
 | `npm test` | Run the vitest suites (`src/*.test.ts`), watch mode |
 
-`src/canvas.ts` and `src/markers.ts` are pure and have real vitest coverage
-(`canvas.test.ts`, `markers.test.ts`) — CI runs `npm test -- --run` before the
-build. Anything else pure (`src/models.ts`) is a good next place to add tests;
-`src/view.ts` and the providers touch the DOM/network and would need mocking
-to be worth it.
+`src/canvas.ts`, `src/markers.ts` and `src/models.ts` are pure and have real
+vitest coverage (`canvas.test.ts`, `markers.test.ts`, `models.test.ts`) — CI
+runs `npm test -- --run` before the build. `src/view.ts` and the providers
+touch the DOM/network and would need mocking to be worth it.
+
+Keep network parsing separate from the network call, the way `readCatalogue`
+is split out of `fetchCatalogue`: the judgement about what a server sent is
+the part worth testing, and it should not need a socket to run.
