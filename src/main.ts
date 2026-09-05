@@ -174,7 +174,7 @@ export default class CymosePlugin extends Plugin {
 						// The menu already said which node. Telling the panel is the
 						// whole point: every one of these used to open with "now go
 						// and pick the node you just right-clicked".
-						view.setTarget(id, true);
+						view.setTarget(id);
 						await action(view);
 					});
 

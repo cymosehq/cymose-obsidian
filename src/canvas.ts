@@ -326,6 +326,18 @@ export function withModelTag(text: string, model: string): string {
 }
 
 /**
+ * The model named in a node's caption, if it has one.
+ *
+ * The caption is written by `withModelTag` and is invisible to the model; this
+ * reads it back so the thread can label an answer with what actually wrote it,
+ * the way the caption already labels the node on the board.
+ */
+export function modelTag(text: string): string {
+	const match = text.match(/<!--\s*cymose:model\s*-->\s*\*—\s*([^*\n]+)\*/);
+	return match ? match[1].trim() : "";
+}
+
+/**
  * Writes a branch's conclusion into `node`, replacing the previous conclusion
  * from that same branch rather than stacking a second copy under it.
  *

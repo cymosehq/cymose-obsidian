@@ -34,7 +34,10 @@ one decision.
   selected, and revealing a node. The only file allowed to know Obsidian's
   internals.
 - `src/providers/` — `ModelAdapter` and its implementations.
-- `src/view.ts` — the panel: what you are branching from, send, stream.
+- `src/view.ts` — the panel: the thread you are in, send, stream. The thread is
+  `ancestry` of the node you are pointed at, which is the same chain
+  `buildMessages` sends — so what you read is what the next turn is answered
+  against, and there is nothing to keep in step.
 - `src/main.ts` — plugin lifecycle, commands.
 
 ## Commands

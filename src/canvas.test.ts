@@ -18,6 +18,7 @@ import {
 	branchSince,
 	textForModel,
 	withModelTag,
+	modelTag,
 	setPromoted,
 	sanitizeCanvasMarkers,
 	CanvasNode
@@ -194,6 +195,18 @@ describe("Canvas Text Formatting", () => {
 		expect(tagged).toContain("This is my answer.");
 		expect(tagged).toContain("<!-- cymose:model -->");
 		expect(tagged).toContain("*— gpt-4*");
+	});
+
+	it("reads the model back out of a tagged node", () => {
+		// The pair is what the thread's role label rests on: whatever
+		// withModelTag wrote, modelTag has to be able to name again.
+		expect(modelTag(withModelTag("An answer.", "Claude Haiku 4.5"))).toBe("Claude Haiku 4.5");
+		// A node a person typed on the board carries no caption, and the label
+		// falls back rather than inventing an author for it.
+		expect(modelTag("Just something I wrote.")).toBe("");
+		// A promoted conclusion sitting under the caption must not be swept in.
+		const both = `${withModelTag("An answer.", "gpt-4")}\n\n<!-- cymose:promoted:b1 -->\n> Conclusion\n<!-- /cymose:promoted -->`;
+		expect(modelTag(both)).toBe("gpt-4");
 	});
 
 	it("sets promoted conclusion", () => {

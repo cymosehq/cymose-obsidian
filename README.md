@@ -95,12 +95,17 @@ That one decision buys most of the product:
    about this note**, which embeds the note in the first node so the canvas
    stays linked in your graph).
 3. Type in the panel, press Enter. Your message becomes a node, and the answer
-   node appears under it straight away and fills in front of you on the canvas.
-4. To branch: click any earlier node on the canvas, or right-click it and
-   choose **Branch from here**, then ask something else. The new line inherits
-   that node's history, not its siblings'. (If the panel can't read your
-   canvas selection, it says so and **Change** gives you a searchable list of
-   every node instead.)
+   node appears under it straight away and fills in front of you — on the
+   canvas, and in the panel's thread at the same time.
+4. The panel reads as a conversation: the chain from the root down to the node
+   you are pointed at, which is exactly the context the next turn is answered
+   against. The last message is what Send hangs off, and the line under it says
+   how many branches already do.
+5. To branch: click an earlier message in the thread, or a node on the canvas,
+   or right-click a node and choose **Branch from here** — then ask something
+   else. The new line inherits that node's history, not its siblings'. (If the
+   panel can't read your canvas selection it says so, and **Point somewhere
+   else** gives you a searchable list of every node instead.)
 
 ### Explore 3 ways
 

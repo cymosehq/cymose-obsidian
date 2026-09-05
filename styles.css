@@ -3,9 +3,12 @@
 .cymose-panel {
 	display: flex;
 	flex-direction: column;
-	gap: 12px;
-	padding: 12px;
+	gap: 8px;
+	padding: 10px 12px 12px;
 	height: 100%;
+	/* The thread scrolls; the panel itself must not, or the composer scrolls
+	   away with it. */
+	overflow: hidden;
 }
 
 .cymose-status {
@@ -42,73 +45,161 @@
 	color: var(--text-error);
 }
 
-.cymose-field {
+/* The thread: the conversation you are in, oldest first, ending at the node the
+   next turn will hang off. It takes the leftover height and scrolls; everything
+   under it is fixed, so the box you type into never moves while an answer
+   arrives. `min-height: 0` because a flex child's default `min-height: auto`
+   refuses to shrink below its content, and a long thread would push the
+   composer off the bottom of the sidebar. */
+.cymose-thread {
+	flex: 1;
+	min-height: 0;
+	overflow-y: auto;
+	overflow-x: hidden;
 	display: flex;
 	flex-direction: column;
-	gap: 4px;
+	gap: 10px;
 }
 
-.cymose-field label {
-	color: var(--text-muted);
-	font-size: var(--font-ui-smaller);
+/* One message.
+   The user's turn is a filled bubble, the way every chat draws it. The
+   assistant's is plain full-width text on the panel's own background — in a
+   sidebar this narrow, a box around an answer costs reading width the answer
+   needs more than it needs a border. */
+.cymose-msg {
+	border-radius: 8px;
+	padding: 2px 2px 2px 10px;
+	border-left: 2px solid transparent;
+	cursor: pointer;
 }
 
-.cymose-field select,
-.cymose-prompt {
-	width: 100%;
+.cymose-msg--user {
+	background: var(--background-secondary);
+	padding: 6px 10px 8px;
 }
 
-/* What this turn hangs off. A readout of a decision already made on the canvas,
-   not a control you operate — so it reads as a statement with an escape hatch,
-   rather than as the sixth dropdown in a form. */
-.cymose-target-head {
+.cymose-msg:hover { border-left-color: var(--background-modifier-border); }
+
+/* Where the next turn hangs off — not a highlight for its own sake, but the
+   answer to "what does Send do", said on the message it will do it to. The
+   bubble an answer streams into is by construction the last one and about to
+   become the target, so `--live` is lit the same way.
+
+   The `:hover` pair is not decoration: `.cymose-msg:hover` above is a class
+   plus a pseudo-class and outranks a lone class, so without it hovering the
+   target greys out the one border that was saying something. */
+.cymose-msg--target,
+.cymose-msg--live { border-left-color: var(--text-accent); }
+
+.cymose-msg--target:hover,
+.cymose-msg--live:hover { border-left-color: var(--text-accent); }
+
+.cymose-msg--target .cymose-msg-role,
+.cymose-msg--live .cymose-msg-role { color: var(--text-accent); }
+
+.cymose-msg-head {
 	display: flex;
 	align-items: baseline;
 	justify-content: space-between;
 	gap: 8px;
+	margin-bottom: 2px;
 }
 
-.cymose-target-origin {
+.cymose-msg-role {
 	color: var(--text-faint);
 	font-size: var(--font-ui-smaller);
-	text-align: right;
 	min-width: 0;
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
 }
 
-.cymose-target-controls {
-	display: flex;
-	align-items: stretch;
-	gap: 4px;
+/* Only under the cursor, so scrolling a long thread isn't a column of buttons
+   down the right-hand side. */
+.cymose-msg-reveal {
+	flex-shrink: 0;
+	background: transparent;
+	border: none;
+	box-shadow: none;
+	padding: 0;
+	height: auto;
+	color: var(--text-faint);
+	font-size: var(--font-ui-smaller);
+	opacity: 0;
 }
 
-/* The node itself: full width, left-aligned and truncated like a filename,
-   because it is one — a name you read, click to go to, and rarely retype. */
-.cymose-target-node {
-	flex: 1;
-	min-width: 0;
-	justify-content: flex-start;
-	text-align: left;
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
-	background: var(--background-secondary);
+.cymose-msg:hover .cymose-msg-reveal { opacity: 1; }
+.cymose-msg-reveal:hover { color: var(--text-accent); }
+
+.cymose-msg-body { font-size: var(--font-ui-small); }
+
+/* markdown-rendered's own margins assume a full note; inside a message the
+   first block's top margin and the last block's bottom margin are just gaps
+   the flex column has already provided. */
+.cymose-msg-body > :first-child { margin-top: 0; }
+.cymose-msg-body > :last-child { margin-bottom: 0; }
+
+/* Nothing to read yet, and which nothing it is. Centred in the space the thread
+   would otherwise leave blank — the panel's resting state should say what to do
+   next, not sit there as an empty rectangle. */
+.cymose-thread-empty {
+	margin: auto 0;
+	padding: 0 4px;
 	color: var(--text-muted);
-	font-size: var(--font-ui-small);
 }
 
-.cymose-target-node--set { color: var(--text-normal); }
+.cymose-thread-empty-title {
+	color: var(--text-normal);
+	font-size: var(--font-ui-small);
+	margin-bottom: 2px;
+}
 
-.cymose-target-node:hover {
+.cymose-thread-empty-hint {
+	font-size: var(--font-ui-smaller);
+	color: var(--text-faint);
+	line-height: 1.5;
+}
+
+/* Between the thread and the box: what Send does to the tree, and the branches
+   that already hang off the same node. Siblings are the reason this draws a
+   tree at all, and the panel used to never mention they existed. */
+.cymose-thread-foot {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 4px;
+	font-size: var(--font-ui-smaller);
+	color: var(--text-faint);
+}
+
+.cymose-foot-where { margin-right: 2px; }
+
+.cymose-foot-branch,
+.cymose-foot-pick {
+	background: var(--background-secondary);
+	border: none;
+	box-shadow: none;
+	height: auto;
+	padding: 2px 7px;
+	border-radius: 10px;
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	max-width: 100%;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.cymose-foot-branch:hover,
+.cymose-foot-pick:hover {
 	background: var(--background-modifier-hover);
 	color: var(--text-normal);
 }
 
-.cymose-target-change { flex-shrink: 0; }
+.cymose-foot-pick { margin-left: auto; }
 
 .cymose-prompt {
+	width: 100%;
 	resize: vertical;
 	font-family: var(--font-text);
 }
@@ -161,51 +252,6 @@
 .cymose-ghost-btn:hover {
 	background: var(--background-modifier-hover);
 	color: var(--text-normal);
-}
-
-/* What the pane below is showing. Small and muted: it is a label on a surface
-   whose content changes job between "the node you're pointed at" and "the
-   answer arriving", and unlabelled that switch reads as the panel losing your
-   place. */
-.cymose-preview-caption {
-	color: var(--text-faint);
-	font-size: var(--font-ui-smaller);
-	margin-bottom: -6px;
-}
-
-/* An empty label is still a flex child: it contributes the column's 12px gap
-   and its own negative margin, so the gap it leaves behind is neither the one
-   above nor the one below. Out of the layout entirely when it says nothing. */
-.cymose-preview-caption--empty { display: none; }
-
-/* The answer as it streams, rendered as real markdown (see markdown-rendered
-   on the element itself for the typography). Flexed so it takes the leftover
-   height instead of growing the panel past the window. */
-.cymose-preview {
-	flex: 1;
-	min-height: 160px;
-	overflow-y: auto;
-	overflow-x: hidden;
-	padding: 8px 10px;
-	border: 1px solid var(--background-modifier-border);
-	border-radius: 6px;
-	background: var(--background-secondary);
-	font-size: var(--font-ui-small);
-}
-
-/* Nothing to read: no border, no 160px floor, no share of the leftover height.
-   The panel's resting state — no canvas open, or a node with no text in it —
-   used to end in a large empty bordered rectangle that read as a pane failing
-   to load rather than as a pane with nothing to say. */
-.cymose-preview--empty {
-	display: none;
-}
-
-/* markdown-rendered's own paragraph/heading margins assume a full note; in
-   this compact box the first block's top margin just adds dead space under a
-   border that already separates it from the compose bar. */
-.cymose-preview > :first-child {
-	margin-top: 0;
 }
 
 .cymose-notice {
