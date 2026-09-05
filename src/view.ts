@@ -344,6 +344,25 @@ export class CymoseView extends ItemView {
 		// note's reading view gets, so a streamed answer looks native rather than
 		// like a plugin's homemade text box.
 		this.preview = root.createDiv({ cls: "cymose-preview markdown-rendered" });
+
+		// Draw the readouts once, here, rather than waiting for the first canvas.
+		// With no canvas open nothing else calls these — attachToActiveCanvas
+		// returns early — and the panel opened showing an unlabelled empty box
+		// where "Branch from" should say what it is pointed at.
+		this.renderTarget();
+		this.showPreview(false);
+	}
+
+	/**
+	 * Whether the reading pane is on screen at all.
+	 *
+	 * Empty, it is a bordered rectangle taking every spare pixel of the sidebar
+	 * and saying nothing — which is the panel's resting state until you point at
+	 * a node with text in it. So it earns its space or it isn't there.
+	 */
+	private showPreview(hasContent: boolean): void {
+		this.preview.toggleClass("cymose-preview--empty", !hasContent);
+		this.previewCaption.toggleClass("cymose-preview-caption--empty", !this.previewCaption.textContent);
 	}
 
 	/** Points the panel at whatever canvas is in front, if any. */
@@ -504,7 +523,11 @@ export class CymoseView extends ItemView {
 		const text = node?.text?.trim() ?? "";
 		this.previewCaption.setText(text ? "The node you're branching from" : "");
 		this.preview.empty();
-		if (!text) return;
+		if (!text) {
+			this.showPreview(false);
+			return;
+		}
+		this.showPreview(true);
 		// Server markers only; our own comment markers stay, because the promoted
 		// conclusions they wrap are exactly what you want to read here before
 		// deciding what to ask next.
@@ -718,6 +741,7 @@ export class CymoseView extends ItemView {
 	/** Caption for the streaming pane: what is arriving, not what is stored. */
 	private captionStream(text: string): void {
 		this.previewCaption.setText(text);
+		this.previewCaption.toggleClass("cymose-preview-caption--empty", !text);
 	}
 
 	private async runPreviewRenderLoop(): Promise<void> {
@@ -725,6 +749,7 @@ export class CymoseView extends ItemView {
 			this.previewDirty = false;
 			const text = this.previewPrefix + stripServerMarkers(this.streamed);
 			this.preview.empty();
+			this.showPreview(Boolean(text.trim()));
 			await MarkdownRenderer.render(this.app, text, this.preview, "", this);
 			this.preview.scrollTop = this.preview.scrollHeight;
 			// If flushPreview() was called again while the render above was in

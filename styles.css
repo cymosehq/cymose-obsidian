@@ -173,6 +173,11 @@
 	margin-bottom: -6px;
 }
 
+/* An empty label is still a flex child: it contributes the column's 12px gap
+   and its own negative margin, so the gap it leaves behind is neither the one
+   above nor the one below. Out of the layout entirely when it says nothing. */
+.cymose-preview-caption--empty { display: none; }
+
 /* The answer as it streams, rendered as real markdown (see markdown-rendered
    on the element itself for the typography). Flexed so it takes the leftover
    height instead of growing the panel past the window. */
@@ -186,6 +191,14 @@
 	border-radius: 6px;
 	background: var(--background-secondary);
 	font-size: var(--font-ui-small);
+}
+
+/* Nothing to read: no border, no 160px floor, no share of the leftover height.
+   The panel's resting state — no canvas open, or a node with no text in it —
+   used to end in a large empty bordered rectangle that read as a pane failing
+   to load rather than as a pane with nothing to say. */
+.cymose-preview--empty {
+	display: none;
 }
 
 /* markdown-rendered's own paragraph/heading margins assume a full note; in
@@ -227,12 +240,15 @@
 
 .cymose-steps li { margin-bottom: 3px; }
 
-/* The connection test's answer. */
-.cymose-status {
+/* The connection test's answer, in the settings tab. Its own class: this used
+   to be `.cymose-status` too, and because it is declared after the panel's rule
+   of the same name it silently won — the panel's one-line status inherited a
+   16px bottom margin and a size it was never meant to have. */
+.cymose-conn-status {
 	margin: 4px 0 16px;
 	font-size: var(--font-ui-small);
 	color: var(--text-muted);
 }
 
-.cymose-status--ok { color: var(--text-success); }
-.cymose-status--error { color: var(--text-error); }
+.cymose-conn-status--ok { color: var(--text-success); }
+.cymose-conn-status--error { color: var(--text-error); }

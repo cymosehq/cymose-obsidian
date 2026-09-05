@@ -79,9 +79,9 @@ export class CymoseSettingTab extends PluginSettingTab {
 			return;
 		}
 		el.setText(message);
-		el.removeClass("cymose-status--ok");
-		el.removeClass("cymose-status--error");
-		if (kind !== "pending") el.addClass(`cymose-status--${kind}`);
+		el.removeClass("cymose-conn-status--ok");
+		el.removeClass("cymose-conn-status--error");
+		if (kind !== "pending") el.addClass(`cymose-conn-status--${kind}`);
 		el.show();
 	}
 
@@ -162,7 +162,7 @@ export class CymoseSettingTab extends PluginSettingTab {
 				}),
 			);
 
-		this.statusEl = containerEl.createEl("p", { cls: "cymose-status" });
+		this.statusEl = containerEl.createEl("p", { cls: "cymose-conn-status" });
 		this.statusEl.hide();
 
 		new Setting(containerEl).setName("Or bring your own key").setHeading();
