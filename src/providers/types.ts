@@ -9,11 +9,8 @@ export type ModelOptions = {
 /**
  * A model provider.
  *
- * There is one implementation today (OpenRouter), and the interface exists
- * anyway because the second one is the point: the product promise is that a
- * rate limit at one vendor doesn't stop your afternoon. Anything provider-
- * specific — auth header, request shape, stream dialect — stops here, so the
- * conversation layer never learns which vendor it is talking to.
+ * Chat goes to whichever adapter settings picked. Cymose is not a provider.
+ * A second vendor is a new file behind ModelAdapter, not a change above it.
  */
 export interface ModelAdapter {
 	readonly id: string;
