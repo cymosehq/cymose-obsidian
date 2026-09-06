@@ -1,18 +1,14 @@
-import { App, FuzzySuggestModal, ItemView, MarkdownRenderer, Notice, TFile, WorkspaceLeaf } from "obsidian";
+import { App, EventRef, FuzzySuggestModal, Notice, TFile, WorkspaceLeaf } from "obsidian";
 import {
 	CanvasData,
-	CanvasNode,
 	COLOR_ASSISTANT,
 	COLOR_USER,
 	appendNode,
 	ancestry,
 	branchSince,
-	childrenOf,
 	estimateHeight,
 	forkPoint,
 	label,
-	leaves,
-	modelTag,
 	readCanvas,
 	removeNode,
 	sanitizeCanvasMarkers,
@@ -21,10 +17,10 @@ import {
 	withModelTag,
 	writeCanvas,
 } from "./canvas";
-import { canvasBridgeWorks, revealNode, selectNode, selectedNodeId } from "./canvas-api";
+import { selectNode, selectedNodeId } from "./canvas-api";
 import { Message, ProviderError } from "./providers/types";
-import { FALLBACK_MODEL_IDS, describe, groupByTier } from "./models";
-import { CYMOSE_ICON } from "./main";
+import { suggestedModels } from "./providers/create";
+import { shortModelLabel } from "./models";
 import { stripServerMarkers } from "./markers";
 import type CymosePlugin from "./main";
 
@@ -54,229 +50,160 @@ const STRATEGIES = [
 	},
 ];
 
-/**
- * How often a streaming answer is written to its node on the canvas.
- *
- * Not once per chunk — that is a disk write and a canvas re-render several
- * times a second, which is how you make an editor feel broken. Twice a second
- * reads as live and Obsidian never notices.
- */
 const CANVAS_FLUSH_MS = 500;
-
-/** What an answer node says before the first words of it arrive. */
 const STREAM_PLACEHOLDER = "…";
-
-/** How much of one pinned note is worth sending. Beyond this it is a document,
- *  not context, and it crowds out the conversation it was meant to inform. */
 const MAX_NOTE_CHARS = 8000;
 
-/**
- * What a promoted conclusion is asked to be.
- *
- * Short and factual, because it is going to be read as context by every branch
- * opened at that node from now on. A hedged five-paragraph summary inherited
- * twenty times is worse than nothing: it costs tokens on every future turn and
- * tells the model to hedge too.
- */
 const PROMOTE_PROMPT =
 	"You are compressing one branch of a branching conversation into the conclusion it reached, " +
 	"so that branches opened later at the same point inherit it. At most five short lines. State " +
 	"what was decided, what was ruled out, and why, as plain facts. Do not restate the question, " +
 	"do not hedge, do not add a heading or a preamble.";
 
-/**
- * Where a streaming answer goes while it streams.
- *
- * `push` is called with the whole text so far and drops most of them on the
- * floor; `settle` waits for the last write it actually started, so the final
- * text written after the stream can never be overtaken by a frame from the
- * middle of it.
- */
 type StreamSink = { push: (partial: string) => void; settle: () => Promise<void> };
 
-export const VIEW_TYPE = "cymose-panel";
+type FileViewLike = { file?: TFile; contentEl?: HTMLElement; containerEl: HTMLElement; getViewType(): string };
 
-// The panel you talk to. The canvas is the conversation; this is the place you
-// choose where to speak from.
-//
-// What you speak from is whatever you selected on the canvas. That is the one
-// gesture this product exists for — see a node, branch from it — and for a long
-// time this panel could not do it: Obsidian publishes no canvas selection API,
-// so the panel asked you to find the node a second time in a dropdown of every
-// node in the conversation. The principle was right about the risk and wrong
-// about the price. `canvas-api.ts` now reads the selection, guarded, and when
-// it reports nothing the explicit picker below is still here and still works.
-export class CymoseView extends ItemView {
-	private file: TFile | null = null;
+/** The canvas file a leaf is showing, if any. */
+export function canvasFileOf(leaf: WorkspaceLeaf): TFile | null {
+	const file = (leaf.view as FileViewLike).file;
+	return file instanceof TFile && file.extension === "canvas" ? file : null;
+}
+
+/**
+ * Composer docked on an Obsidian canvas view.
+ *
+ * The conversation is the canvas. There is no sidebar thread: you point at a
+ * node on the board, type here, and the reply hangs off that node. This class
+ * is not an ItemView — it mounts onto the canvas leaf's content and unmounts
+ * when that leaf goes away or stops showing a Cymose conversation.
+ */
+export class CymoseOverlay {
+	file: TFile | null = null;
 	private data: CanvasData = { nodes: [], edges: [] };
 	private parentId: string | null = null;
-	// The last canvas selection we adopted. Lets the poll tell a genuine change
-	// of mind from the same node merely still being selected — and stops a
-	// manual pick being overwritten a moment later by the selection it replaced.
 	private lastSeenSelection: string | null = null;
-	// Whether reading the canvas selection works on this Obsidian. Re-checked on
-	// every reload rather than once at load: the answer depends on which view is
-	// in front, and a plugin that decided this at startup would be wrong the
-	// first time you opened a canvas.
-	private canvasReadable = false;
 	private sending = false;
 	private streamed = "";
-	// The in-flight turn's canceller, and whether the user pressed Stop. `abort`
-	// exists only while a stream is open; `stopped` is read by the callers to
-	// decide whether to keep the partial and stop rather than carry on.
 	private abort: AbortController | null = null;
 	private stopped = false;
-	// Coalesces calls to MarkdownRenderer.render on the preview element. A
-	// render is real async work (post-processors, embeds) — firing one per
-	// stream chunk without this would let renders overlap and a later chunk's
-	// call finish before an earlier one's, painting stale text back over fresh
-	// text. Every caller of flushPreview() gets back the SAME in-flight
-	// promise and setting `previewDirty` before returning it guarantees at
-	// least one more pass reads the now-current `this.streamed` before the
-	// loop can exit — so every await genuinely waits for a render that
-	// reflects what was true at the moment of the call, not a stale one.
-	private previewRenderPromise: Promise<void> | null = null;
-	private previewDirty = false;
-	// Renders of the target node, one at a time. MarkdownRenderer.render is real
-	// async work that appends as it goes, so two of them overlapping paints one
-	// node's text into the middle of another's. `previewGeneration` lets a job
-	// that has been overtaken skip its own work rather than draw something the
-	// user has already navigated away from.
-	private previewJob: Promise<void> = Promise.resolve();
-	private previewGeneration = 0;
-	// What the thread currently shows: every node's id, colour and text, joined.
-	// The selection poll and the vault's modify event both land on renderThread
-	// far more often than the thread actually changes, and redrawing means a
-	// MarkdownRenderer pass per message. Cleared, not compared, whenever a turn
-	// writes to the thread directly — the DOM has diverged from the file by
-	// design then, and only a full redraw can settle it.
-	private drawnKey: string | null = null;
 
-	private thread!: HTMLElement;
-	private threadFoot!: HTMLElement;
-	private modelSelect!: HTMLSelectElement;
+	private root: HTMLElement | null = null;
+	private host: HTMLElement | null = null;
+	private hintEl!: HTMLElement;
+	private setupEl!: HTMLElement;
+	private errorBox!: HTMLElement;
+	private modelInput!: HTMLInputElement;
+	private modelList!: HTMLDataListElement;
+	private tempInput!: HTMLInputElement;
+	private tempValue!: HTMLElement;
+	private instructions!: HTMLTextAreaElement;
 	private prompt!: HTMLTextAreaElement;
 	private sendButton!: HTMLButtonElement;
 	private stopButton!: HTMLButtonElement;
 	private exploreButton!: HTMLButtonElement;
-	private promoteButton!: HTMLButtonElement;
-	private pinButton!: HTMLButtonElement;
-	// The bubble a running answer is drawn into. Null between turns, when the
-	// thread is drawn from the canvas file instead — which is the authority.
-	private stream: HTMLElement | null = null;
-	private status!: HTMLElement;
-	private activity!: HTMLElement;
-	private errorBox!: HTMLElement;
+	private newRootButton!: HTMLButtonElement;
+
+	private refs: EventRef[] = [];
+	private poll: number | null = null;
 
 	constructor(
-		leaf: WorkspaceLeaf,
 		private plugin: CymosePlugin,
-	) {
-		super(leaf);
+		private leaf: WorkspaceLeaf,
+	) {}
+
+	private get app(): App {
+		return this.plugin.app;
 	}
 
-	getViewType(): string {
-		return VIEW_TYPE;
-	}
+	mount(): void {
+		this.detach();
+		const view = this.leaf.view as FileViewLike;
+		const host = view.contentEl ?? (view.containerEl.querySelector(".view-content") as HTMLElement | null);
+		if (!host) return;
+		this.host = host;
+		host.addClass("cymose-canvas-host");
+		this.root = host.createDiv({ cls: "cymose-dock" });
+		this.root.addEventListener("mousedown", (event) => event.stopPropagation());
+		this.root.addEventListener("pointerdown", (event) => event.stopPropagation());
+		this.build(this.root);
 
-	getDisplayText(): string {
-		return "Cymose";
-	}
-
-	getIcon(): string {
-		return CYMOSE_ICON;
-	}
-
-	async onOpen(): Promise<void> {
-		this.build();
-		await this.attachToActiveCanvas();
-
-		// Following the active file is what makes the panel feel part of the
-		// app: open a canvas, and the panel is already pointed at it.
-		this.registerEvent(
-			this.app.workspace.on("active-leaf-change", () => void this.attachToActiveCanvas()),
-		);
-		// Someone may edit the canvas by hand, or a second window may add a node.
-		this.registerEvent(
+		this.refs.push(
 			this.app.vault.on("modify", (file) => {
 				if (file instanceof TFile && this.file && file.path === this.file.path && !this.sending) {
 					void this.reload();
 				}
 			}),
 		);
-
-		// There is no canvas selection event, so the panel looks. Twice a second,
-		// only while this view exists (registerInterval ties it to the view's
-		// lifetime), and the work is reading a handful of string ids.
-		this.registerInterval(
-			window.setInterval(() => {
-				if (!this.sending) this.syncSelection();
-			}, 500),
-		);
-
-		// Fetch catalogue silently. If updated, repopulate the dropdown.
-		void this.plugin.refreshCatalogue().then((updated) => {
-			if (updated) this.populateModels();
-		});
+		this.poll = window.setInterval(() => {
+			if (!this.sending) this.syncSelection();
+		}, 500);
 	}
 
-	private build(): void {
-		const root = this.containerEl.children[1];
-		root.empty();
-		root.addClass("cymose-panel");
+	bind(file: TFile): void {
+		if (!this.root?.isConnected) this.mount();
+		if (this.file?.path === file.path) {
+			this.refreshSetup();
+			return;
+		}
+		this.file = file;
+		void this.reload();
+	}
 
-		// Three different things used to share one line of muted text: which
-		// canvas you are on, what is happening right now, and what went wrong.
-		// They have different lifetimes, so they get different homes — the
-		// symptom of merging them was that an error appeared for as long as it
-		// took the next reload to overwrite it, which is to say not long enough
-		// to read.
-		this.status = root.createDiv({ cls: "cymose-status" });
-		this.activity = root.createDiv({ cls: "cymose-activity" });
-		this.activity.hide();
+	detach(): void {
+		for (const ref of this.refs) this.app.vault.offref(ref);
+		this.refs = [];
+		if (this.poll !== null) {
+			window.clearInterval(this.poll);
+			this.poll = null;
+		}
+		this.root?.remove();
+		this.root = null;
+		this.host?.removeClass("cymose-canvas-host");
+		this.host = null;
+		this.file = null;
+	}
+
+	private build(root: HTMLElement): void {
+		this.setupEl = root.createDiv({ cls: "cymose-setup" });
+		this.setupEl.createDiv({
+			cls: "cymose-setup-text",
+			text: "Add a provider key to send. Turns go from this vault to that provider — Cymose never sees them.",
+		});
+		const setupBtn = this.setupEl.createEl("button", { cls: "mod-cta cymose-setup-btn", text: "Open settings" });
+		setupBtn.onclick = () => this.openPluginSettings();
+
 		this.errorBox = root.createDiv({ cls: "cymose-error" });
 		this.errorBox.hide();
 
-		// The conversation, as a conversation.
-		//
-		// This panel used to be a control desk: a "Branch from" readout, a box,
-		// and a row of verbs — Explore, Promote, Pin — pointed at a node you had
-		// selected somewhere else. Every one of those verbs acts on a thread, and the
-		// thread was the one thing not on screen. You reassembled it in your head
-		// by following arrows between bubbles on the board.
-		//
-		// So the panel is the thread now. `ancestry` already computes it — it is
-		// the same chain we send to the model, which is the point: what you read
-		// here is exactly what the next turn is answered against, and the last
-		// bubble is what it hangs off. Nothing to point at separately.
-		this.thread = root.createDiv({ cls: "cymose-thread" });
+		const meta = root.createDiv({ cls: "cymose-dock-meta" });
+		this.hintEl = meta.createDiv({ cls: "cymose-dock-hint", text: "Ask anything — it becomes a node." });
+		const metaActions = meta.createDiv({ cls: "cymose-dock-actions" });
+		this.newRootButton = metaActions.createEl("button", { cls: "cymose-ghost-btn", text: "New root" });
+		this.newRootButton.title = "Don't reply under a card. Start another thread on this canvas.";
+		this.newRootButton.onclick = () => this.setTarget(null);
 
-		// Under the last bubble: where this turn will land, and the branches that
-		// already hang off it. A node with three children is the whole reason
-		// this product draws a tree, and until now the panel never mentioned they
-		// existed.
-		this.threadFoot = root.createDiv({ cls: "cymose-thread-foot" });
+		const composer = root.createDiv({ cls: "cymose-composer" });
+		this.instructions = composer.createEl("textarea", { cls: "cymose-instructions" });
+		this.instructions.rows = 1;
+		this.instructions.placeholder = "Instructions (optional) — how the model should answer on this canvas";
+		this.instructions.title = "How the model should answer. Sent as the system message.";
+		this.instructions.value = this.plugin.settings.systemPrompt;
+		this.instructions.addEventListener("change", () => {
+			this.plugin.settings.systemPrompt = this.instructions.value;
+			void this.plugin.saveSettings();
+		});
 
-		this.prompt = root.createEl("textarea", { cls: "cymose-prompt" });
-		this.prompt.rows = 3;
-		this.prompt.placeholder =
-			"Continue this thread — Enter sends · ⌘/Ctrl+Enter explores three ways · Esc stops";
-		// registerDomEvent, not addEventListener: Obsidian unregisters it with the
-		// view. Relying on the element being torn down works today and is the
-		// first thing a plugin reviewer asks about.
-		this.registerDomEvent(this.prompt, "keydown", (event) => {
-			// Escape stops a running turn. The Stop button is a few centimetres
-			// away and the hand is already on the keyboard; the moment you want
-			// to stop an answer is not the moment to go looking for a mouse.
+		this.prompt = composer.createEl("textarea", { cls: "cymose-prompt" });
+		this.prompt.rows = 2;
+		this.prompt.placeholder = "Select a card to reply under it, or start a new root…";
+		this.prompt.addEventListener("input", () => this.fitPrompt());
+		this.prompt.addEventListener("keydown", (event) => {
 			if (event.key === "Escape" && this.abort) {
 				event.preventDefault();
 				this.abort.abort();
 				return;
 			}
-			// Ctrl/Cmd+Enter explores. Enter sends, shift+enter breaks the line —
-			// the convention every chat box in the world uses, and the one people
-			// try first. Explore is the same gesture with the modifier that means
-			// "and more of it", which is what three branches are.
 			if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
 				event.preventDefault();
 				void this.explore();
@@ -288,73 +215,59 @@ export class CymoseView extends ItemView {
 			}
 		});
 
-		// The compose bar: model choice and Send/Stop, right where the turn is
-		// actually sent from — a property of THIS message, not a setting to dig
-		// for above the box. Compact, unlabeled select (title/aria-label carry
-		// the meaning) rather than its own full row: picking a model per turn is
-		// the thing a branching tool is for, but it shouldn't outweigh the box
-		// you're about to type into.
-		const composeBar = root.createDiv({ cls: "cymose-compose-bar" });
-		this.modelSelect = composeBar.createEl("select", { cls: "dropdown cymose-model-select" });
-		this.modelSelect.title = "Model for this turn";
-		this.modelSelect.setAttr("aria-label", "Model for this turn");
-		this.modelSelect.onchange = () => void this.chooseModel(this.modelSelect.value);
+		const bar = composer.createDiv({ cls: "cymose-composer-bar" });
+		this.modelInput = bar.createEl("input", { cls: "cymose-model-input" });
+		this.modelInput.type = "text";
+		this.modelInput.placeholder = "Model id";
+		this.modelList = composer.createEl("datalist");
+		this.modelList.id = `cymose-model-suggestions-${Math.random().toString(36).slice(2)}`;
+		this.modelInput.setAttr("list", this.modelList.id);
+		this.modelInput.setAttr("aria-label", "Model for this turn");
+		this.modelInput.title = "Any text or multimodal model id this provider accepts.";
+		this.modelInput.addEventListener("change", () => void this.chooseModel(this.modelInput.value.trim()));
 		this.populateModels();
 
-		const composeActions = composeBar.createDiv({ cls: "cymose-compose-actions" });
-		this.sendButton = composeActions.createEl("button", { cls: "mod-cta", text: "Send" });
+		const tempWrap = bar.createDiv({ cls: "cymose-temp" });
+		tempWrap.createSpan({ cls: "cymose-temp-label", text: "Temp" });
+		this.tempInput = tempWrap.createEl("input");
+		this.tempInput.type = "range";
+		this.tempInput.min = "0";
+		this.tempInput.max = "2";
+		this.tempInput.step = "0.1";
+		this.tempInput.setAttr("aria-label", "Temperature");
+		this.tempValue = tempWrap.createSpan({ cls: "cymose-temp-value" });
+		this.syncTemperature();
+		this.tempInput.addEventListener("input", () => {
+			this.plugin.settings.temperature = Number.parseFloat(this.tempInput.value);
+			this.tempValue.setText(this.plugin.settings.temperature.toFixed(1));
+		});
+		this.tempInput.addEventListener("change", () => void this.plugin.saveSettings());
+
+		this.exploreButton = bar.createEl("button", { cls: "cymose-ghost-btn", text: "Explore 3" });
+		this.exploreButton.title = "⌘/Ctrl+Enter — three different answers under this question.";
+		this.exploreButton.onclick = () => void this.explore();
+
+		this.sendButton = bar.createEl("button", { cls: "mod-cta cymose-send-btn", text: "Send" });
+		this.sendButton.title = "Enter to send · Shift+Enter for a new line";
 		this.sendButton.onclick = () => void this.send();
 
-		// Cancels the open stream. Hidden until a turn is running, so the row
-		// isn't cluttered with a button that does nothing most of the time.
-		this.stopButton = composeActions.createEl("button", { cls: "mod-warning", text: "Stop" });
-		this.stopButton.title = "Stop the answer. What already streamed is kept.";
+		this.stopButton = bar.createEl("button", { cls: "mod-warning cymose-send-btn", text: "Stop" });
+		this.stopButton.title = "Stop. What already streamed is kept.";
 		this.stopButton.onclick = () => this.abort?.abort();
 		this.stopButton.hide();
 
-		// Real actions, but not things you do every turn — a visual step below
-		// the compose bar (smaller, muted, behind a hairline divider) so the
-		// panel has one obvious next move instead of six equally-weighted
-		// buttons competing for the same glance.
-		const secondary = root.createDiv({ cls: "cymose-secondary-actions" });
-		this.exploreButton = secondary.createEl("button", { cls: "cymose-ghost-btn", text: "Explore 3 ways" });
-		this.exploreButton.title = "Ask this once per strategy — three branches off the same question.";
-		this.exploreButton.onclick = () => void this.explore();
-
-		this.promoteButton = secondary.createEl("button", { cls: "cymose-ghost-btn", text: "Promote" });
-		this.promoteButton.title = "Summarise this branch into the node it forked from, so later branches inherit it.";
-		this.promoteButton.onclick = () => void this.promote();
-
-		this.pinButton = secondary.createEl("button", { cls: "cymose-ghost-btn", text: "Pin a note" });
-		this.pinButton.title = "Embed a note in this node. Every branch below it reads the note.";
-		this.pinButton.onclick = () => void this.pinNote();
-
-		const newButton = secondary.createEl("button", { cls: "cymose-ghost-btn", text: "New conversation" });
-		newButton.onclick = () => void this.plugin.newConversation();
-
-		// Drawn once here rather than on the first canvas: with no canvas open
-		// nothing else calls it — attachToActiveCanvas returns early — and the
-		// panel would open on a blank rectangle.
-		void this.renderThread();
+		this.refreshSetup();
+		this.refreshHint();
 	}
 
-	/** Points the panel at whatever canvas is in front, if any. */
-	private async attachToActiveCanvas(): Promise<void> {
-		const file = this.app.workspace.getActiveFile();
-		if (!file || file.extension !== "canvas") {
-			// Keep the previous canvas attached rather than blanking the panel:
-			// clicking a note to read it should not lose your place.
-			if (!this.file) this.setStatus("Open a canvas, or press “New conversation”.");
-			return;
-		}
-		if (this.file?.path === file.path) return;
-		this.file = file;
-		await this.reload();
+	focusPrompt(): void {
+		this.prompt?.focus();
 	}
 
-	async openFile(file: TFile): Promise<void> {
-		this.file = file;
-		await this.reload();
+	setTarget(id: string | null): void {
+		this.parentId = id;
+		if (id) this.lastSeenSelection = id;
+		this.refreshHint();
 	}
 
 	private async reload(): Promise<void> {
@@ -368,318 +281,63 @@ export class CymoseView extends ItemView {
 			this.showError((error as Error).message);
 			return;
 		}
-		this.canvasReadable = canvasBridgeWorks(this.app);
-		this.ensureTarget();
+		this.dropStaleTarget();
 		this.syncSelection();
-		void this.renderThread();
-		// A catalogue fetched by the settings tab after this panel was built only
-		// reaches the picker on a reload — cheap to rebuild, and it keeps the
-		// shown model in step with settings if it was changed there.
 		this.populateModels();
-		this.setStatus(`${this.file.basename} · ${this.data.nodes.length} node${this.data.nodes.length === 1 ? "" : "s"}`);
+		this.refreshSetup();
+		this.refreshHint();
 	}
 
-	/**
-	 * Adopts the canvas selection, if it changed since we last looked.
-	 *
-	 * Polled rather than subscribed, because there is no selection event to
-	 * subscribe to. It is a set of string ids read a few times a second while
-	 * the panel is open — cheap enough to be beneath notice, and the only way
-	 * to make clicking a node mean something.
-	 *
-	 * Deselecting is not an instruction. Clicking empty canvas clears the
-	 * selection constantly and never means "forget what I was answering"; so a
-	 * selection that goes away leaves the target where it was.
-	 */
 	private syncSelection(): void {
 		const selected = selectedNodeId(this.app);
 		if (!selected || selected === this.lastSeenSelection) return;
 		this.lastSeenSelection = selected;
-		// A node from a canvas we aren't attached to isn't ours to branch from.
 		if (!this.data.nodes.some((n) => n.id === selected)) return;
 		this.parentId = selected;
-		void this.renderThread();
+		this.refreshHint();
 	}
 
-	/**
-	 * Points the panel at `id`, from an explicit act rather than the canvas.
-	 *
-	 * Records it as seen, so the poll doesn't hand the target straight back to
-	 * whatever is still highlighted on the canvas.
-	 */
-	setTarget(id: string | null): void {
-		this.parentId = id;
-		if (id) this.lastSeenSelection = id;
-		void this.renderThread();
+	/** Keep a reply target only if that card still exists. Never invent one. */
+	private dropStaleTarget(): void {
+		if (!this.parentId) return;
+		if (!this.data.nodes.some((n) => n.id === this.parentId)) this.parentId = null;
 	}
 
-	/**
-	 * Chooses the target when nothing on the canvas says what it is.
-	 *
-	 * Leaves come first: continuing the conversation is what you want nine times
-	 * out of ten, and branching from the middle is the deliberate act. This is
-	 * the same list the old dropdown held, but fuzzy-searchable — which is the
-	 * difference between usable and unusable once a conversation has forty
-	 * nodes in it.
-	 */
-	private ensureTarget(): void {
-		if (this.data.nodes.length === 0) {
-			this.parentId = null;
-			return;
-		}
-		if (this.parentId && this.data.nodes.some((n) => n.id === this.parentId)) return;
-		const ends = leaves(this.data);
-		this.parentId = ends[ends.length - 1]?.id ?? null;
-	}
-
-	/**
-	 * Redraws the thread: the chain from the root down to the node you are
-	 * pointed at, oldest first.
-	 *
-	 * Serialised behind one job with a generation guard, for the same reason the
-	 * single-node preview this replaces was: MarkdownRenderer.render is real
-	 * async work that appends as it goes, so two of them overlapping paints one
-	 * node's text into the middle of another's. Never while a turn is running —
-	 * the streaming renderer owns the last bubble then.
-	 */
-	private renderThread(): Promise<void> {
-		const generation = (this.previewGeneration += 1);
-		this.previewJob = this.previewJob
-			.catch(() => undefined)
-			.then(() => this.drawThread(generation));
-		return this.previewJob;
-	}
-
-	private async drawThread(generation: number): Promise<void> {
-		if (generation !== this.previewGeneration || this.sending) return;
-		// build() may not have run yet: openFile() can arrive from the plugin
-		// before Obsidian has called onOpen on a freshly created leaf.
-		if (!this.thread) return;
-
-		const chain = this.file && this.parentId ? ancestry(this.data, this.parentId) : [];
-		// Text and colour, not just ids: a node edited by hand on the board keeps
-		// its id, and a thread that ignored that would quietly show the old words.
-		const key = chain.map((n) => `${n.id}\u0000${n.color ?? ""}\u0000${n.text ?? ""}`).join("\u0001");
-		if (this.drawnKey === key && this.file) {
-			// Same thread, and it is already on screen. The foot still redraws:
-			// a sibling may have appeared under the node we are pointed at.
-			this.renderFoot();
-			return;
-		}
-
-		this.thread.empty();
-		this.drawnKey = null;
-		this.stream = null;
-		this.renderFoot();
-
-		if (!this.file) {
-			this.emptyThread(
-				"No conversation open.",
-				"Press “New conversation” below, or open a .canvas file — every conversation is one.",
-			);
-			return;
-		}
-		if (!chain.length) {
-			this.emptyThread(
-				this.data.nodes.length ? "Nothing pointed at." : "Empty conversation.",
-				this.data.nodes.length
-					? "Click a node on the canvas and the thread leading to it appears here."
-					: "Ask something below. It becomes the first node on the board.",
-			);
-			return;
-		}
-		for (const node of chain) {
-			const body = this.addBubble(node);
-			// Server markers only; our own comment markers stay, because the
-			// promoted conclusions they wrap are exactly what you want to read
-			// here before deciding what to ask next.
-			const text = stripServerMarkers(node.text ?? "").trim();
-			if (text) await MarkdownRenderer.render(this.app, text, body, this.file.path, this);
-			// Overtaken mid-chain — a click on the canvas while a long thread was
-			// still drawing. Stop rather than finish painting a thread nobody is
-			// looking at any more.
-			if (generation !== this.previewGeneration) return;
-		}
-		this.drawnKey = key;
-		this.thread.scrollTop = this.thread.scrollHeight;
-	}
-
-	/**
-	 * One message in the thread. Returns the element its text renders into.
-	 *
-	 * Clicking it points the panel — and the canvas — at that node, which is how
-	 * you branch from the middle of a thread without leaving the thread: read
-	 * down to the turn that went wrong, click it, ask again. That gesture is the
-	 * product, and it used to require finding the node on the board first.
-	 */
-	private addBubble(node: CanvasNode): HTMLElement {
-		const assistant = node.color === COLOR_ASSISTANT;
-		const bubble = this.thread.createDiv({
-			cls: `cymose-msg ${assistant ? "cymose-msg--assistant" : "cymose-msg--user"}`,
-		});
-		if (node.id === this.parentId) bubble.addClass("cymose-msg--target");
-		const head = bubble.createDiv({ cls: "cymose-msg-head" });
-		// A hand-written node has no colour and reads as the user's, the same way
-		// buildMessages treats it — so the label never claims a model wrote
-		// something a person typed on the board.
-		head.createSpan({
-			cls: "cymose-msg-role",
-			text: assistant ? modelTag(node.text ?? "") || "Assistant" : "You",
-		});
-		const reveal = head.createEl("button", { cls: "cymose-msg-reveal", text: "On canvas" });
-		reveal.title = "Show this node on the board";
-		reveal.onclick = (event) => {
-			event.stopPropagation();
-			if (!revealNode(this.app, node.id)) {
-				new Notice("Cymose: couldn't reach the canvas — open it in the main pane.");
-			}
-		};
-		bubble.onclick = () => {
-			// Selecting text inside a message is not a request to move the target.
-			// Without this, dragging across a sentence to copy it re-points the
-			// panel at whatever message the drag ended in.
-			if (window.getSelection()?.toString()) return;
-			if (node.id === this.parentId) return;
-			this.setTarget(node.id);
-			selectNode(this.app, node.id);
-		};
-		return bubble.createDiv({ cls: "cymose-msg-body markdown-rendered" });
-	}
-
-	/** Puts one node at the end of the thread, rendered, without a full redraw. */
-	private async appendMessage(node: CanvasNode): Promise<void> {
-		if (!this.thread) return;
-		this.drawnKey = null;
-		const body = this.addBubble(node);
-		const text = stripServerMarkers(node.text ?? "").trim();
-		if (text) await MarkdownRenderer.render(this.app, text, body, this.file?.path ?? "", this);
-		this.thread.scrollTop = this.thread.scrollHeight;
-	}
-
-	/** The thread with nothing in it, saying which nothing it is. */
-	private emptyThread(title: string, hint: string): void {
-		const empty = this.thread.createDiv({ cls: "cymose-thread-empty" });
-		empty.createDiv({ cls: "cymose-thread-empty-title", text: title });
-		empty.createDiv({ cls: "cymose-thread-empty-hint", text: hint });
-	}
-
-	/**
-	 * The line between the thread and the box: what pressing Send does to the
-	 * tree, and the branches that already hang off the same node.
-	 *
-	 * Siblings are the reason this product draws a tree, and the panel never
-	 * mentioned they existed — you had to spot them on the board. A node with
-	 * three children says so here, and each one is a click away.
-	 */
-	private renderFoot(): void {
-		this.threadFoot.empty();
+	private refreshHint(): void {
+		if (!this.hintEl) return;
 		const node = this.parentId ? this.data.nodes.find((n) => n.id === this.parentId) : null;
-
 		if (!node) {
-			if (this.data.nodes.length) {
-				this.threadFoot.createSpan({ cls: "cymose-foot-where", text: "Starts a new root on this canvas." });
-			}
+			this.hintEl.setText(
+				this.data.nodes.length
+					? "New root — Send adds a new thread. Click a card to reply under it."
+					: "Send creates the first card. Click a card later to reply under it.",
+			);
 		} else {
-			const kids = childrenOf(this.data, node.id);
-			this.threadFoot.createSpan({
-				cls: "cymose-foot-where",
-				text: kids.length
-					? `Branches from here — ${kids.length} already ${kids.length === 1 ? "does" : "do"}:`
-					: "Continues this thread.",
-			});
-			for (const kid of kids) {
-				const jump = this.threadFoot.createEl("button", { cls: "cymose-foot-branch", text: label(kid, 24) });
-				jump.title = "Read that branch instead";
-				jump.onclick = () => {
-					this.setTarget(kid.id);
-					selectNode(this.app, kid.id);
-				};
-			}
+			this.hintEl.setText(`Reply under “${label(node, 48)}”`);
 		}
-
-		if (!this.data.nodes.length) return;
-		const pick = this.threadFoot.createEl("button", { cls: "cymose-foot-pick", text: "Point somewhere else" });
-		// The guarded bridge found nothing it recognised. Say so on the control
-		// that works anyway, instead of leaving people clicking nodes on the
-		// board and wondering why the panel ignores them.
-		pick.title = this.canvasReadable
-			? "Pick a node without hunting for it on the board"
-			: "This Obsidian won't tell us what's selected — pick the node here";
-		pick.onclick = () => this.pickTarget();
-
-		// Promote summarises a branch into its fork point and Pin embeds a note
-		// in a node: both need a node. They used to sit there fully lit on an
-		// empty panel and answer a click with a notice explaining why not.
-		const hasTarget = Boolean(node);
-		this.promoteButton.disabled = this.sending || !hasTarget;
-		this.pinButton.disabled = this.sending || !hasTarget;
+		if (this.newRootButton) this.newRootButton.disabled = !this.parentId || this.sending;
 	}
 
-	/** Puts the cursor where the next thing you type goes. Called by the canvas
-	 *  menu, which has just answered "from where" and left only "what". */
-	focusPrompt(): void {
-		this.prompt.focus();
-	}
-
-	/** The picker: every node, fuzzy-matched, plus starting a new root. */
-	private pickTarget(): void {
-		if (!this.data.nodes.length) {
-			new Notice("Cymose: this conversation is empty — just type and send.");
-			return;
-		}
-		const ends = leaves(this.data);
-		const endIds = new Set(ends.map((n) => n.id));
-		const choices: TargetChoice[] = [
-			...ends.map((node) => ({ id: node.id, text: `→ ${label(node, 80)}` })),
-			...this.data.nodes
-				.filter((n) => !endIds.has(n.id))
-				.map((node) => ({ id: node.id, text: `⑂ ${label(node, 80)}` })),
-			{ id: null, text: "— new root —" },
-		];
-		new TargetPicker(this.app, choices, (choice) => {
-			this.setTarget(choice.id);
-			if (choice.id) revealNode(this.app, choice.id);
-		}).open();
-	}
-
-	/**
-	 * Fills the panel's model picker from the cached catalogue.
-	 *
-	 * Same source as the settings tab: the tiered catalogue from GET /v1/models
-	 * when a Cymose account is what pays for the turn, the bare fallback ids when
-	 * an OpenRouter key does (our credit tiers describe a bill OpenRouter isn't
-	 * sending). The currently-selected model is always kept selectable, even if
-	 * it's a free-text id or a hosted model an own-key list hides — the panel
-	 * must never show a different model than the turn will actually use.
-	 */
 	private populateModels(): void {
-		const { model, modelCatalogue, cymoseToken, apiKey } = this.plugin.settings;
-		const usingOwnKey = !cymoseToken.trim() && Boolean(apiKey.trim());
-		const catalogue = usingOwnKey ? [] : modelCatalogue;
-		this.modelSelect.empty();
-
+		if (!this.modelInput || !this.modelList) return;
+		const { model, provider } = this.plugin.settings;
+		this.modelList.empty();
 		const known = new Set<string>();
-		if (catalogue.length) {
-			// Obsidian's dropdown has no group API, so the optgroups go on the
-			// select directly — the same approach the settings tab takes.
-			for (const group of groupByTier(catalogue)) {
-				const optgroup = this.modelSelect.createEl("optgroup");
-				optgroup.label = group.label;
-				for (const entry of group.models) {
-					optgroup.createEl("option", { value: entry.id, text: describe(entry) });
-					known.add(entry.id);
-				}
-			}
-		} else {
-			for (const id of FALLBACK_MODEL_IDS) {
-				this.modelSelect.createEl("option", { value: id, text: id });
-				known.add(id);
-			}
+		for (const id of suggestedModels(provider)) {
+			this.modelList.createEl("option", { value: id, text: shortModelLabel(id) });
+			known.add(id);
 		}
 		if (model && !known.has(model)) {
-			this.modelSelect.createEl("option", { value: model, text: model });
+			this.modelList.createEl("option", { value: model });
 		}
-		this.modelSelect.value = model;
+		this.modelInput.value = model;
+	}
+
+	private syncTemperature(): void {
+		if (!this.tempInput || !this.tempValue) return;
+		const t = this.plugin.settings.temperature;
+		this.tempInput.value = String(t);
+		this.tempValue.setText(t.toFixed(1));
 	}
 
 	private async chooseModel(id: string): Promise<void> {
@@ -688,42 +346,39 @@ export class CymoseView extends ItemView {
 		await this.plugin.saveSettings();
 	}
 
-	/** How the answering model reads on a node: the catalogue's friendly name
-	 *  when we have it, the raw id otherwise. */
 	private modelLabel(id: string): string {
-		return this.plugin.settings.modelCatalogue.find((m) => m.id === id)?.label ?? id;
+		return shortModelLabel(id);
 	}
 
-	/** Which canvas the panel is pointed at. Ambient; survives everything. */
-	private setStatus(text: string): void {
-		this.status.setText(text);
+	private fitPrompt(): void {
+		this.prompt.style.height = "auto";
+		this.prompt.style.height = `${Math.min(this.prompt.scrollHeight, 160)}px`;
 	}
 
-	/**
-	 * What is happening right now, and how far through it we are.
-	 *
-	 * Shown only while something is running, so an idle panel isn't carrying a
-	 * stale sentence about a turn that finished ten minutes ago.
-	 */
-	private setActivity(text: string | null): void {
-		if (!text) {
-			this.activity.hide();
-			this.activity.setText("");
-			return;
+	private refreshSetup(): void {
+		if (!this.setupEl) return;
+		const needs = this.plugin.needsSetup();
+		this.setupEl.toggleClass("is-hidden", !needs);
+		this.prompt.disabled = needs || this.sending;
+		this.sendButton.disabled = needs || this.sending;
+		this.exploreButton.disabled = needs || this.sending;
+		this.modelInput.disabled = needs || this.sending;
+		this.tempInput.disabled = needs || this.sending;
+		this.instructions.disabled = needs || this.sending;
+		if (this.newRootButton) this.newRootButton.disabled = !this.parentId || this.sending;
+		this.populateModels();
+		this.syncTemperature();
+		if (!this.sending && this.instructions && document.activeElement !== this.instructions) {
+			this.instructions.value = this.plugin.settings.systemPrompt;
 		}
-		this.activity.setText(text);
-		this.activity.show();
 	}
 
-	/**
-	 * What went wrong, until you say you've read it.
-	 *
-	 * A Notice is gone in eight seconds and the status line was overwritten by
-	 * the reload that followed the failure — so the panel's account of why a
-	 * turn failed reliably outlived neither. This one stays until it is
-	 * dismissed or the next turn starts, which is the only lifetime that
-	 * matches how long the information is useful for.
-	 */
+	private openPluginSettings(): void {
+		const setting = (this.app as unknown as { setting: { open(): void; openTabById(id: string): void } }).setting;
+		setting.open();
+		setting.openTabById(this.plugin.manifest.id);
+	}
+
 	private showError(message: string): void {
 		this.errorBox.empty();
 		this.errorBox.createDiv({ cls: "cymose-error-text", text: message });
@@ -740,44 +395,48 @@ export class CymoseView extends ItemView {
 		this.errorBox.hide();
 	}
 
-	/** Everything that writes or spends runs one at a time, and the panel says so. */
-	private begin(busyLabel: string): void {
+	private begin(): void {
 		this.sending = true;
 		this.stopped = false;
-		// The last failure is about the last turn. Starting a new one answers it.
 		this.clearError();
-		this.setActivity(busyLabel);
-		this.sendButton.setText(busyLabel);
-		for (const button of [this.sendButton, this.exploreButton, this.promoteButton, this.pinButton]) {
-			button.disabled = true;
-		}
+		this.sendButton.hide();
+		this.exploreButton.disabled = true;
+		this.newRootButton.disabled = true;
+		this.prompt.disabled = true;
+		this.modelInput.disabled = true;
+		this.tempInput.disabled = true;
+		this.instructions.disabled = true;
+		this.stopButton.setText("Stop");
 		this.stopButton.disabled = false;
 		this.stopButton.show();
 	}
 
 	private end(): void {
 		this.sending = false;
-		this.setActivity(null);
-		// The thread goes back to being drawn from the canvas file — which, after
-		// a turn, holds the answer that just landed.
-		void this.renderThread();
-		this.sendButton.setText("Send");
-		for (const button of [this.sendButton, this.exploreButton, this.promoteButton, this.pinButton]) {
-			button.disabled = false;
-		}
+		this.sendButton.show();
 		this.stopButton.hide();
+		this.stopButton.setText("Stop");
+		this.refreshSetup();
+		this.refreshHint();
 	}
 
-	/** A canvas to write to and a way to pay for the turn, or a reason why not. */
+	private captureComposer(): void {
+		const id = this.modelInput?.value.trim();
+		if (id) this.plugin.settings.model = id;
+		if (this.instructions) this.plugin.settings.systemPrompt = this.instructions.value;
+		const t = Number.parseFloat(this.tempInput?.value ?? "");
+		if (Number.isFinite(t)) this.plugin.settings.temperature = t;
+		void this.plugin.saveSettings();
+	}
+
 	private async ready(): Promise<boolean> {
 		if (this.sending) return false;
-		if (!this.file) {
-			await this.plugin.newConversation();
-			if (!this.file) return false;
-		}
+		if (!this.file) return false;
+		this.captureComposer();
 		if (this.plugin.needsSetup()) {
-			// Names the path we want people on, and doesn't hide the other one.
-			new Notice("Cymose: sign in to Cymose in settings — or add your own OpenRouter key.");
+			this.refreshSetup();
+			this.openPluginSettings();
+			new Notice("Cymose: add a provider key in settings.");
 			return false;
 		}
 		return true;
@@ -789,75 +448,12 @@ export class CymoseView extends ItemView {
 		this.showError(message);
 	}
 
-	/**
-	 * Renders the live preview as actual markdown, not raw text.
-	 *
-	 * Obsidian is a markdown-native app — asterisks and backticks sitting
-	 * literally on screen while an answer streams reads as unfinished, and
-	 * disagrees with how the same text looks a moment later once it's written
-	 * into the canvas node (which Obsidian renders normally). Always reads
-	 * `this.streamed` live rather than taking the text as a parameter, so the
-	 * dirty-flag redraw below can never paint something stale.
-	 */
-	private flushPreview(): Promise<void> {
-		this.previewDirty = true;
-		if (!this.previewRenderPromise) {
-			this.previewRenderPromise = this.runPreviewRenderLoop();
-		}
-		return this.previewRenderPromise;
-	}
-
-	/**
-	 * Opens the bubble a running answer draws into, at the end of the thread.
-	 *
-	 * The canvas node for that same answer is created at the same moment and
-	 * fills in step. Both are the same text arriving in two places, which is the
-	 * point rather than a duplication: the board shows you where it landed, the
-	 * thread is where you read it.
-	 */
-	private openStream(heading: string): void {
-		this.drawnKey = null;
-		const bubble = this.thread.createDiv({ cls: "cymose-msg cymose-msg--assistant cymose-msg--live" });
-		bubble
-			.createDiv({ cls: "cymose-msg-head" })
-			.createSpan({ cls: "cymose-msg-role", text: heading || "Answering…" });
-		this.stream = bubble.createDiv({ cls: "cymose-msg-body markdown-rendered" });
-		this.thread.scrollTop = this.thread.scrollHeight;
-	}
-
-	private async runPreviewRenderLoop(): Promise<void> {
-		while (this.previewDirty) {
-			this.previewDirty = false;
-			const target = this.stream;
-			// The thread was redrawn from the canvas under us — the turn is over,
-			// or was abandoned. Nothing to paint into.
-			if (!target) break;
-			const text = stripServerMarkers(this.streamed);
-			target.empty();
-			await MarkdownRenderer.render(this.app, text, target, this.file?.path ?? "", this);
-			this.thread.scrollTop = this.thread.scrollHeight;
-			// If flushPreview() was called again while the render above was in
-			// flight, previewDirty is true again here — loop once more, reading
-			// `this.streamed` fresh rather than returning already a chunk behind.
-		}
-		this.previewRenderPromise = null;
-	}
-
-	/**
-	 * Applies a change to the canvas file, re-reading it first.
-	 *
-	 * The re-read is what lets a turn run for thirty seconds without eating an
-	 * edit someone made elsewhere on the board in the meantime: we write back a
-	 * file we just looked at, with one node changed, rather than the copy the
-	 * panel happened to be holding.
-	 */
 	private async patchCanvas(file: TFile, change: (data: CanvasData) => void): Promise<void> {
 		const data = await readCanvas(this.app.vault, file);
 		change(data);
 		await writeCanvas(this.app.vault, file, data);
 	}
 
-	/** Sets one node's text and re-fits its height to it. */
 	private async writeNodeText(file: TFile, nodeId: string, text: string): Promise<void> {
 		await this.patchCanvas(file, (data) => {
 			const node = data.nodes.find((n) => n.id === nodeId);
@@ -867,18 +463,6 @@ export class CymoseView extends ItemView {
 		});
 	}
 
-	/**
-	 * A sink that writes the answer into its node on the canvas as it arrives.
-	 *
-	 * This is the change that makes the canvas the place the conversation
-	 * happens rather than the place it is filed afterwards. It used to stream
-	 * into a box in the sidebar and land as a node somewhere on the board when
-	 * it was over — one thing in two places, and you had to go and find it.
-	 *
-	 * A dropped intermediate frame costs nothing: the final text is written
-	 * unconditionally when the stream ends, so a failed write here is worth
-	 * swallowing rather than interrupting an answer over.
-	 */
 	private canvasSink(file: TFile, nodeId: string, prefix = ""): StreamSink {
 		let inFlight: Promise<void> = Promise.resolve();
 		let busy = false;
@@ -900,27 +484,8 @@ export class CymoseView extends ItemView {
 		};
 	}
 
-	/**
-	 * Streams one answer, into its node on the canvas and into the panel's
-	 * preview at the same time, and hands the finished text back.
-	 *
-	 * The preview is the reading copy — wide markdown, scrollable, and it does
-	 * not move under you the way a growing canvas node does. The node is where
-	 * the answer actually lives. Both show the same text at the same time,
-	 * which is the point: nothing lands anywhere you weren't watching.
-	 */
-	private async streamTurn(
-		messages: Message[],
-		heading: string,
-		model: string,
-		sink?: StreamSink,
-	): Promise<string> {
-		// The heading names the strategy when `explore` runs three turns at once.
-		// It labels the bubble rather than being prepended to the answer inside
-		// it: it is not part of what the model said.
-		this.openStream(heading);
+	private async streamTurn(messages: Message[], model: string, sink?: StreamSink): Promise<string> {
 		this.streamed = "";
-		await this.flushPreview();
 		const controller = new AbortController();
 		this.abort = controller;
 		try {
@@ -930,16 +495,9 @@ export class CymoseView extends ItemView {
 				maxTokens: this.plugin.settings.maxTokens,
 			}, controller.signal)) {
 				this.streamed += chunk;
-				// Fire-and-forget: flushPreview's own in-flight guard coalesces any
-				// chunks that arrive faster than markdown rendering keeps up with,
-				// so this never queues unbounded work or races itself.
-				void this.flushPreview();
 				sink?.push(this.streamed);
 			}
 		} catch (error) {
-			// Stop pressed: keep what streamed and let the caller write it, rather
-			// than throwing away a half-written answer the user chose to cut short.
-			// Any other error is a real failure and propagates.
 			if (error instanceof DOMException && error.name === "AbortError") {
 				this.stopped = true;
 			} else {
@@ -948,16 +506,10 @@ export class CymoseView extends ItemView {
 		} finally {
 			this.abort = null;
 		}
-		// Settle on the final, complete text — a fire-and-forget flush from the
-		// last chunk may still be catching up, in the preview and on the canvas
-		// both. Waiting for the canvas one is what stops a frame from the middle
-		// of the stream landing on top of the final text the caller writes next.
-		await this.flushPreview();
 		await sink?.settle();
 		return stripServerMarkers(this.streamed).trim();
 	}
 
-	/** One turn: write the question, open the answer node, stream into it. */
 	private async send(): Promise<void> {
 		const text = this.prompt.value.trim();
 		if (!text) return;
@@ -965,52 +517,27 @@ export class CymoseView extends ItemView {
 		const file = this.file;
 		if (!file) return;
 
-		// Fixed for the whole turn, so the caption names the model that actually
-		// answered even if the picker is changed while the answer streams.
 		const usedModel = this.plugin.settings.model;
-		// Declared out here so the catch below knows whether there is a
-		// half-written node on the canvas to salvage or take back.
 		let answerId: string | null = null;
-		this.begin("Sending…");
+		this.begin();
 		try {
-			// Re-read before writing: the file may have changed since the panel
-			// last looked, and appending to a stale copy would drop those nodes.
 			this.data = await readCanvas(this.app.vault, file);
 			const question = appendNode(this.data, this.parentId, text, COLOR_USER);
-			// The answer node exists before a word of it does. The board used to
-			// sit still for as long as the model took and then grow a node
-			// somewhere you had to go and find; now the place the answer will
-			// live is visible from the moment you press Send, and fills up in
-			// front of you.
 			const answerNode = appendNode(this.data, question.id, STREAM_PLACEHOLDER, COLOR_ASSISTANT);
 			answerId = answerNode.id;
 			await writeCanvas(this.app.vault, file, this.data);
-			// Selected, not zoomed to: the node is by construction just below the
-			// one you were looking at, and rearranging the user's view of the
-			// board to show them that is a worse trade than a highlight.
 			selectNode(this.app, answerNode.id);
-			// The question joins the thread the moment it is written, not on the
-			// reload at the end of the turn: you should be able to read what you
-			// just asked while the answer to it arrives under it.
-			await this.appendMessage(question);
 
-			// Built from the question, so the empty answer node just created is not
-			// in the chain — ancestry walks upwards.
 			const messages = await this.buildMessages(question.id);
-			const streamed = await this.streamTurn(messages, "", usedModel, this.canvasSink(file, answerNode.id));
+			const streamed = await this.streamTurn(messages, usedModel, this.canvasSink(file, answerNode.id));
 
 			if (this.stopped && !streamed) {
-				// Cut short before a word arrived: the question stays, but the
-				// placeholder is ours and an empty node is litter, so we take it
-				// back rather than leave it to be deleted by hand.
 				await this.patchCanvas(file, (data) => removeNode(data, answerNode.id));
 				new Notice("Cymose: stopped. Your question is on the canvas.");
 				await this.reload();
 				this.setTarget(question.id);
 				return;
 			}
-			// Tag real answers with the model; leave the "nothing came back"
-			// placeholder untagged — there's no answer to attribute.
 			const answer = streamed
 				? withModelTag(streamed, this.modelLabel(usedModel))
 				: "_(the model returned nothing)_";
@@ -1018,16 +545,11 @@ export class CymoseView extends ItemView {
 			if (this.stopped) new Notice("Cymose: stopped — kept the partial answer.");
 
 			this.prompt.value = "";
+			this.fitPrompt();
 			await this.reload();
-			// Continue from the answer, which is where the next question goes —
-			// and select it on the canvas, so the panel and the board agree about
-			// where you are without you having to go and find the new node.
 			this.setTarget(answerNode.id);
 			selectNode(this.app, answerNode.id);
 		} catch (error) {
-			// The question node stays. It cost nothing, it records what was asked,
-			// and deleting it would also delete whatever the user typed. The
-			// answer node only stays if there is an answer in it.
 			this.fail(error);
 			if (answerId) await this.salvage(file, answerId, usedModel);
 			await this.reload();
@@ -1036,14 +558,6 @@ export class CymoseView extends ItemView {
 		}
 	}
 
-	/**
-	 * What to do with an answer node whose turn died mid-flight.
-	 *
-	 * Whatever streamed before the failure is kept — it is often the useful
-	 * half, and it is the part the user watched arrive, so deleting it would be
-	 * taking away something they had already read. Nothing streamed means the
-	 * node is a placeholder we put there and nobody wants, so it goes.
-	 */
 	private async salvage(file: TFile, nodeId: string, model: string): Promise<void> {
 		const partial = stripServerMarkers(this.streamed).trim();
 		try {
@@ -1053,19 +567,10 @@ export class CymoseView extends ItemView {
 				await this.patchCanvas(file, (data) => removeNode(data, nodeId));
 			}
 		} catch {
-			// Already failing. A second error here would replace a useful message
-			// about why the turn died with a useless one about tidying up.
+			/* already failing */
 		}
 	}
 
-	/**
-	 * The same question, three ways, as three branches off one node.
-	 *
-	 * This is the thing a canvas is for and a chat box cannot do. Three answers
-	 * side by side, none of them contaminated by the other two, and all three
-	 * still there tomorrow when you want to know why you picked the one you
-	 * picked.
-	 */
 	async explore(): Promise<void> {
 		const text = this.prompt.value.trim();
 		if (!text) {
@@ -1077,24 +582,17 @@ export class CymoseView extends ItemView {
 		if (!file) return;
 
 		const usedModel = this.plugin.settings.model;
-		this.begin("Exploring…");
+		this.begin();
 		try {
 			this.data = await readCanvas(this.app.vault, file);
 			const question = appendNode(this.data, this.parentId, text, COLOR_USER);
 			await writeCanvas(this.app.vault, file, this.data);
-			await this.appendMessage(question);
 
 			const base = await this.buildMessages(question.id);
 			let written = 0;
 
 			for (const [index, strategy] of STRATEGIES.entries()) {
-				// Each branch is drawn before it is answered, so the fork appears
-				// on the canvas as it is being explored. This is the fix that
-				// matters most here: all three answers used to stream through the
-				// one preview box in turn, each wiping out the last, so the
-				// comparison this feature exists for was impossible to watch and
-				// only assembled itself once everything had finished.
-				this.setActivity(`${index + 1} of ${STRATEGIES.length} · ${strategy.label}`);
+				this.stopButton.setText(`${index + 1}/3`);
 				const caption = `_${strategy.label}_\n\n`;
 				this.data = await readCanvas(this.app.vault, file);
 				const branch = appendNode(this.data, question.id, caption + STREAM_PLACEHOLDER, COLOR_ASSISTANT);
@@ -1105,14 +603,10 @@ export class CymoseView extends ItemView {
 				try {
 					answer = await this.streamTurn(
 						this.withNudge(base, strategy.nudge),
-						`${index + 1}/${STRATEGIES.length} · ${strategy.label}`,
 						usedModel,
 						this.canvasSink(file, branch.id, caption),
 					);
 				} catch (error) {
-					// One strategy failing is no reason to throw away the ones that
-					// worked. A rate limit halfway through costs you a branch, not
-					// the exploration.
 					this.fail(error);
 					await this.salvage(file, branch.id, usedModel);
 					break;
@@ -1121,20 +615,14 @@ export class CymoseView extends ItemView {
 					await this.writeNodeText(file, branch.id, withModelTag(caption + answer, this.modelLabel(usedModel)));
 					written += 1;
 				} else {
-					// Nothing came back for this strategy: take the placeholder back
-					// rather than leave an empty branch that looks like an answer.
 					await this.patchCanvas(file, (data) => removeNode(data, branch.id));
 				}
-				// Stop ends the whole exploration, not just this strategy — the
-				// branches already written stay, the ones not yet asked don't run.
 				if (this.stopped) break;
 			}
 
 			this.prompt.value = "";
+			this.fitPrompt();
 			await this.reload();
-			// Stay on the question: the next thing you do is compare the three,
-			// and anything you ask next belongs beside them, not under whichever
-			// one happened to finish last.
 			this.setTarget(question.id);
 			selectNode(this.app, question.id);
 			if (written) {
@@ -1147,15 +635,6 @@ export class CymoseView extends ItemView {
 		}
 	}
 
-	/**
-	 * Sends this branch's conclusion back up to the node it forked from.
-	 *
-	 * The half of branching nobody else does. Forking is easy and every canvas
-	 * has it; the problem is that a decision made three levels down stays down
-	 * there, and the next branch you open re-litigates it. Promote compresses the
-	 * branch into what it settled and writes that into the fork point — so every
-	 * branch opened there afterwards starts already knowing.
-	 */
 	async promote(): Promise<void> {
 		const tipId = this.parentId;
 		if (!tipId) {
@@ -1166,7 +645,7 @@ export class CymoseView extends ItemView {
 		const file = this.file;
 		if (!file) return;
 
-		this.begin("Promoting…");
+		this.begin();
 		try {
 			this.data = await readCanvas(this.app.vault, file);
 			const tip = this.data.nodes.find((n) => n.id === tipId);
@@ -1190,8 +669,6 @@ export class CymoseView extends ItemView {
 				return;
 			}
 
-			// Labels taken before the write: after it, the target's text carries the
-			// conclusion we just added and would make a nonsense label.
 			const targetLabel = label(target, 40);
 			const tipLabel = label(tip, 40);
 
@@ -1200,11 +677,8 @@ export class CymoseView extends ItemView {
 					{ role: "system", content: PROMOTE_PROMPT },
 					{ role: "user", content: transcript },
 				],
-				`promoting into “${targetLabel}”`,
 				this.plugin.settings.model,
 			);
-			// A half-written conclusion is worse than none — it's inherited by every
-			// later branch. If Stop cut it short, promote nothing.
 			if (this.stopped) {
 				new Notice("Cymose: promotion stopped — nothing written.");
 				return;
@@ -1231,16 +705,6 @@ export class CymoseView extends ItemView {
 		}
 	}
 
-	/**
-	 * Pins a note to the selected node. Every branch below it reads the note.
-	 *
-	 * The reason this plugin belongs in Obsidian rather than in a browser tab:
-	 * the reference material is already here, already written by you, and pinning
-	 * it costs a click instead of a paste. It goes in as an ordinary embed, so
-	 * the canvas shows the note inline and the vault's graph knows about the
-	 * link — and because it is resolved at send time, editing the note changes
-	 * what every branch below it is answered against.
-	 */
 	async pinNote(): Promise<void> {
 		if (this.sending) return;
 		const nodeId = this.parentId;
@@ -1279,11 +743,6 @@ export class CymoseView extends ItemView {
 		}).open();
 	}
 
-	/**
-	 * Merged into the system message rather than appended as a second one:
-	 * providers disagree about whether a system turn may appear after user turns,
-	 * and an exploration is not the place to find out which one you are on.
-	 */
 	private withNudge(base: Message[], nudge: string): Message[] {
 		const messages = base.slice();
 		if (messages[0]?.role === "system") {
@@ -1294,20 +753,6 @@ export class CymoseView extends ItemView {
 		return messages;
 	}
 
-	/**
-	 * The branch, as messages.
-	 *
-	 * The chain up to the root is the context — which is what makes a branch a
-	 * branch rather than a fresh chat: fork from any node and the new line
-	 * inherits everything above it and nothing beside it. Sibling branches stay
-	 * invisible to each other, which is the point. Promoted conclusions ride
-	 * along for free, because they live in the text of a node on this chain.
-	 *
-	 * Roles alternate by colour, because that is what we set when we wrote the
-	 * node; a hand-added node has no colour and is treated as the user's, which
-	 * is the reading that makes "type a note on the canvas and ask about it"
-	 * work.
-	 */
 	private async buildMessages(fromNodeId: string): Promise<Message[]> {
 		const chain = ancestry(this.data, fromNodeId);
 		const messages: Message[] = [];
@@ -1325,15 +770,6 @@ export class CymoseView extends ItemView {
 		return messages;
 	}
 
-	/**
-	 * Replaces `![[note]]` with what the note actually says.
-	 *
-	 * Without this a pinned note is decoration: the canvas shows the note
-	 * embedded, the request carries a filename in double brackets, and the answer
-	 * comes back as though nothing were pinned at all. Resolved at send time
-	 * rather than at pin time, so editing the note changes every branch below it
-	 * without re-pinning anything.
-	 */
 	private async resolveEmbeds(text: string): Promise<string> {
 		const embeds = [...text.matchAll(/!\[\[([^\]|#^]+)(?:[#^][^\]|]*)?(?:\|[^\]]*)?\]\]/g)];
 		if (!embeds.length) return text;
@@ -1344,9 +780,6 @@ export class CymoseView extends ItemView {
 				match[1].trim(),
 				this.file?.path ?? "",
 			);
-			// Not something we can read as text — an image, or a link to a note
-			// that doesn't exist. Leave the embed as written rather than silently
-			// dropping what the user pinned.
 			if (!(target instanceof TFile) || target.extension !== "md") continue;
 
 			let body: string;
@@ -1359,8 +792,6 @@ export class CymoseView extends ItemView {
 				body.length > MAX_NOTE_CHARS
 					? `${body.slice(0, MAX_NOTE_CHARS)}\n…(note truncated)`
 					: body;
-			// Function replacement, not a string: a note containing `$&` or `$1`
-			// would otherwise be spliced into itself by the regex engine.
 			out = out.replace(
 				match[0],
 				() => `--- note: ${target.basename} ---\n${clipped.trim()}\n--- end of note ---`,
@@ -1370,41 +801,6 @@ export class CymoseView extends ItemView {
 	}
 }
 
-/** One entry in the target picker. A null id means "start a new root". */
-type TargetChoice = { id: string | null; text: string };
-
-/**
- * Which node to branch from, when the canvas isn't answering that.
- *
- * A modal rather than the dropdown this replaced, for one reason: it is
- * fuzzy-searchable. The dropdown listed every node in the conversation with no
- * way to find one, which was fine at ten nodes and useless at forty — and forty
- * nodes is what a tool built for branching produces in an afternoon.
- */
-class TargetPicker extends FuzzySuggestModal<TargetChoice> {
-	constructor(
-		app: App,
-		private choices: TargetChoice[],
-		private onPick: (choice: TargetChoice) => void,
-	) {
-		super(app);
-		this.setPlaceholder("Branch from which node?");
-	}
-
-	getItems(): TargetChoice[] {
-		return this.choices;
-	}
-
-	getItemText(choice: TargetChoice): string {
-		return choice.text;
-	}
-
-	onChooseItem(choice: TargetChoice): void {
-		this.onPick(choice);
-	}
-}
-
-/** Which note to pin. Every markdown file in the vault, fuzzy-matched by path. */
 class NotePicker extends FuzzySuggestModal<TFile> {
 	constructor(
 		app: App,

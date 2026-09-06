@@ -1,68 +1,60 @@
 import { App, PluginSettingTab, Setting } from "obsidian";
 import type CymosePlugin from "./main";
-import type { SyncMap } from "./sync";
-import {
-	FALLBACK_MODEL_IDS,
-	groupByTier,
-	describe,
-	isCymoseHostedModel,
-	type CatalogueEntry,
-} from "./models";
+import { PROVIDER_LABELS, suggestedModels, type ProviderId } from "./providers/create";
+
+export type { ProviderId };
 
 export interface CymoseSettings {
-	/** OpenRouter key. Lives in this vault's plugin data, never leaves it
-	 *  except to OpenRouter itself. */
+	provider: ProviderId;
+	/** Provider key. Lives in this vault's plugin data. */
 	apiKey: string;
+	/** OpenAI-compatible base, e.g. http://127.0.0.1:11434/v1 */
+	baseUrl: string;
 	model: string;
 	temperature: number;
 	maxTokens: number;
-	/** Where new conversations are created. */
 	folder: string;
-	/** Prepended to every conversation. Empty means none. */
+	/** Composer "Instructions". Sent as the system message. */
 	systemPrompt: string;
-	/** Cymose API address. Only used by the tree pull; empty disables it. */
-	cymoseApiUrl: string;
-	/** Cymose access token, for reading your web tree. Never sent anywhere else. */
-	cymoseToken: string;
-	/** Which canvas node mirrors which Cymose node, per canvas path. See sync.ts. */
-	syncMap: SyncMap;
-	/** Last catalogue read from GET /v1/models. Empty until one is fetched. */
-	modelCatalogue: CatalogueEntry[];
-	/** When it was read, so the tab doesn't ask on every open. */
-	modelCatalogueAt: number;
 }
 
-
-
-// The default costs no credits.
-//
-// It used to be Claude Haiku, which is a metered model — so a new user signed
-// in, pressed "Explore 3 ways", and three metered turns came out of an
-// allowance they had not been told they were spending. On the web the free
-// Cloudflare models are what the picker leads with and what a free account
-// actually runs on; there was no reason for the plugin to disagree, and every
-// reason not to, since the first five minutes decide whether there is a sixth.
-//
-// Anyone who wants Sonnet can pick it in two clicks. Nobody should have to
-// choose a model, or read a price list, before their first question.
 export const DEFAULT_SETTINGS: CymoseSettings = {
+	provider: "openrouter",
 	apiKey: "",
-	model: "@cf/openai/gpt-oss-120b",
+	baseUrl: "http://127.0.0.1:11434/v1",
+	model: "deepseek/deepseek-v4-flash",
 	temperature: 0.7,
 	maxTokens: 2048,
 	folder: "Cymose",
-	systemPrompt:
-		"You are part of a branching conversation on a canvas. Answer the current message directly and concisely. Earlier messages are the branch you are on; do not restate them.",
-	cymoseApiUrl: "https://api.cymose.app",
-	cymoseToken: "",
-	syncMap: {},
-	modelCatalogue: [],
-	modelCatalogueAt: 0,
+	systemPrompt: "",
 };
 
+const PROVIDERS = Object.keys(PROVIDER_LABELS) as ProviderId[];
+
+/** Keep only fields this build uses. Older plugin data may still contain a Cymose token. */
+export function parseSettings(raw: unknown): CymoseSettings {
+	const data = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+	const provider = data.provider;
+	return {
+		provider: PROVIDERS.includes(provider as ProviderId) ? (provider as ProviderId) : DEFAULT_SETTINGS.provider,
+		apiKey: typeof data.apiKey === "string" ? data.apiKey : DEFAULT_SETTINGS.apiKey,
+		baseUrl: typeof data.baseUrl === "string" ? data.baseUrl : DEFAULT_SETTINGS.baseUrl,
+		model: typeof data.model === "string" ? data.model : DEFAULT_SETTINGS.model,
+		temperature:
+			typeof data.temperature === "number" && Number.isFinite(data.temperature)
+				? data.temperature
+				: DEFAULT_SETTINGS.temperature,
+		maxTokens:
+			typeof data.maxTokens === "number" && Number.isFinite(data.maxTokens) && data.maxTokens > 0
+				? data.maxTokens
+				: DEFAULT_SETTINGS.maxTokens,
+		folder: typeof data.folder === "string" ? data.folder : DEFAULT_SETTINGS.folder,
+		systemPrompt: typeof data.systemPrompt === "string" ? data.systemPrompt : DEFAULT_SETTINGS.systemPrompt,
+	};
+}
+
 export class CymoseSettingTab extends PluginSettingTab {
-	/** Where the connection test writes its answer. Recreated on each display(). */
-	private statusEl: HTMLElement | null = null;
+	private keyStatusEl: HTMLElement | null = null;
 
 	constructor(
 		app: App,
@@ -72,7 +64,7 @@ export class CymoseSettingTab extends PluginSettingTab {
 	}
 
 	private setStatus(message: string | null, kind: "ok" | "error" | "pending" = "pending"): void {
-		const el = this.statusEl;
+		const el = this.keyStatusEl;
 		if (!el) return;
 		if (!message) {
 			el.hide();
@@ -88,145 +80,84 @@ export class CymoseSettingTab extends PluginSettingTab {
 	display(): void {
 		const { containerEl } = this;
 		containerEl.empty();
-		this.statusEl = null;
+		this.keyStatusEl = null;
+		const s = this.plugin.settings;
 
 		const notice = containerEl.createDiv({ cls: "cymose-notice" });
 		notice.createEl("p", {
 			text:
-				"Paste a Cymose token below and it works on the free tier, with the " +
-				"same allowance as the web app; a plan raises it. Bringing your own OpenRouter key " +
-				"instead is supported and spends your provider credit rather than Cymose credits.",
-		});
-		notice.createEl("p", {
-			text:
-				"Conversations are saved as ordinary Obsidian canvas files in your vault, and keep " +
-				"working if you uninstall this plugin. A turn is sent to whichever service you " +
-				"configured below — Cymose, or OpenRouter on your own key — and neither one keeps a " +
-				"copy of it: Cymose answers the request and stores nothing but the credits it cost.",
+				"The canvas is the chat. Click a card, then Send — the reply hangs under it as a child. " +
+				"You can also write a card yourself and draw an arrow: that is the same branch. " +
+				"Turns go from this vault to the provider you pick. Cymose never sees them.",
 		});
 
-		new Setting(containerEl).setName("Cymose account").setHeading();
-
-		// Where the token comes from, in the order you have to do it.
-		//
-		// The previous wording said "from your account page at cymose.app". There
-		// was no account page, and the closest thing to a token was the Supabase
-		// session sitting in devtools — which expires in an hour. So the
-		// documented route was impossible, the discoverable one broke before
-		// lunch, and the plugin looked broken to everyone who tried either.
-		const steps = containerEl.createEl("ol", { cls: "cymose-steps" });
-		steps.createEl("li").append(
-			createFragment((frag) => {
-				frag.appendText("Open ");
-				frag.createEl("a", { href: "https://web.cymose.app", text: "web.cymose.app" });
-				frag.appendText(" and sign in (or create a free account).");
-			}),
-		);
-		steps.createEl("li", { text: "Go to Settings → Connected apps." });
-		steps.createEl("li", { text: "Create a token, name it something like “Obsidian”, and copy it." });
-		steps.createEl("li", { text: "Paste it below. It's shown once, so paste it before closing that page." });
+		new Setting(containerEl).setName("Provider").setHeading();
 
 		new Setting(containerEl)
-			.setName("Cymose token")
+			.setName("Provider")
+			.setDesc("Any text or multimodal model that provider lists. Type the model id in the composer.")
+			.addDropdown((drop) => {
+				for (const id of PROVIDERS) {
+					drop.addOption(id, PROVIDER_LABELS[id]);
+				}
+				drop.setValue(s.provider);
+				drop.onChange(async (value) => {
+					s.provider = value as ProviderId;
+					const suggestions = suggestedModels(s.provider);
+					if (suggestions.length && !suggestions.includes(s.model)) {
+						s.model = suggestions[0];
+					}
+					await this.plugin.saveSettings();
+					this.display();
+				});
+			});
+
+		if (s.provider === "custom") {
+			new Setting(containerEl)
+				.setName("Base URL")
+				.setDesc("OpenAI-compatible chat completions root. Ollama is usually http://127.0.0.1:11434/v1")
+				.addText((text) =>
+					text
+						.setPlaceholder("http://127.0.0.1:11434/v1")
+						.setValue(s.baseUrl)
+						.onChange(async (value) => {
+							s.baseUrl = value.trim();
+							await this.plugin.saveSettings();
+						}),
+				);
+		}
+
+		new Setting(containerEl)
+			.setName("API key")
 			.setDesc(
-				"Starts with cym_. It doesn't expire — it works until you revoke it on that same page.",
+				s.provider === "custom"
+					? "Optional for local servers. Stored in this vault's plugin data, unencrypted."
+					: "Stored in this vault's plugin data, unencrypted — same as every Obsidian plugin.",
 			)
 			.addText((text) => {
 				text.inputEl.type = "password";
 				text
-					.setPlaceholder("cym_…")
-					.setValue(this.plugin.settings.cymoseToken)
+					.setPlaceholder(s.provider === "openrouter" ? "sk-or-v1-…" : "sk-…")
+					.setValue(s.apiKey)
 					.onChange(async (value) => {
-						this.plugin.settings.cymoseToken = value.trim();
+						s.apiKey = value.trim();
 						await this.plugin.saveSettings();
-						// Any status shown is about the token that was there a
-						// keystroke ago, and a stale green tick next to a token that
-						// no longer works is worse than no tick.
 						this.setStatus(null);
 					});
 			});
 
-		// "Did that work?" answered here, before the first question is asked.
-		//
-		// Without this the first sign that a token is wrong is a failed turn,
-		// which reports a provider error — so a mistyped credential looks like a
-		// broken model, and the setting people go back to change is the wrong one.
 		new Setting(containerEl)
 			.setName("Check the connection")
-			.setDesc("Asks Cymose who you are and what your allowance is. Costs nothing.")
 			.addButton((button) =>
 				button.setButtonText("Test").onClick(async () => {
 					this.setStatus("Checking…");
-					const result = await this.plugin.testConnection();
+					const result = await this.plugin.testProvider();
 					this.setStatus(result.message, result.ok ? "ok" : "error");
 				}),
 			);
 
-		this.statusEl = containerEl.createEl("p", { cls: "cymose-conn-status" });
-		this.statusEl.hide();
-
-		new Setting(containerEl).setName("Or bring your own key").setHeading();
-		containerEl.createEl("p", {
-			cls: "cymose-notice",
-			text:
-				"Set a key here and turns go straight to OpenRouter on your account instead of spending " +
-				"Cymose credits. Leave it empty to use your Cymose account.",
-		});
-
-		new Setting(containerEl)
-			.setName("OpenRouter API key")
-			.setDesc(
-				createFragment((frag) => {
-					frag.appendText("Get one at ");
-					frag.createEl("a", { href: "https://openrouter.ai/keys", text: "openrouter.ai/keys" });
-					frag.appendText(". Stored in this vault's plugin data, unencrypted — the same place every Obsidian plugin keeps its settings.");
-				}),
-			)
-			.addText((text) => {
-				text.inputEl.type = "password";
-				text
-					.setPlaceholder("sk-or-v1-…")
-					.setValue(this.plugin.settings.apiKey)
-				.onChange(async (value) => {
-					this.plugin.settings.apiKey = value.trim();
-					// Switching to BYOK while a Cymose-hosted model is selected would
-					// make the first request fail. Move to a known OpenRouter model so
-					// changing credentials is immediately usable.
-					if (this.plugin.settings.apiKey && !this.plugin.settings.cymoseToken.trim() && isCymoseHostedModel(this.plugin.settings.model)) {
-						this.plugin.settings.model = FALLBACK_MODEL_IDS[0];
-					}
-					await this.plugin.saveSettings();
-				});
-			});
-
-		this.modelSetting(containerEl);
-
-		new Setting(containerEl)
-			.setName("Temperature")
-			.setDesc("Higher wanders further. Branches are usually more interesting above 0.7.")
-			.addSlider((slider) =>
-				slider
-					.setLimits(0, 1.5, 0.1)
-					.setValue(this.plugin.settings.temperature)
-					.onChange(async (value) => {
-						this.plugin.settings.temperature = value;
-						await this.plugin.saveSettings();
-					}),
-			);
-
-		new Setting(containerEl)
-			.setName("Max tokens per answer")
-			.addText((text) =>
-				text
-					.setValue(String(this.plugin.settings.maxTokens))
-					.onChange(async (value) => {
-						const parsed = Number.parseInt(value, 10);
-						// A bad number would otherwise become NaN and fail the next
-						// turn with a provider error that explains nothing.
-						this.plugin.settings.maxTokens = Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_SETTINGS.maxTokens;
-						await this.plugin.saveSettings();
-					}),
-			);
+		this.keyStatusEl = containerEl.createEl("p", { cls: "cymose-conn-status" });
+		this.keyStatusEl.hide();
 
 		new Setting(containerEl)
 			.setName("Conversations folder")
@@ -234,117 +165,21 @@ export class CymoseSettingTab extends PluginSettingTab {
 			.addText((text) =>
 				text
 					.setPlaceholder("Cymose")
-					.setValue(this.plugin.settings.folder)
+					.setValue(s.folder)
 					.onChange(async (value) => {
-						this.plugin.settings.folder = value.trim();
-						await this.plugin.saveSettings();
-					}),
-			);
-
-		new Setting(containerEl).setName("Advanced").setHeading();
-
-		new Setting(containerEl)
-			.setName("Cymose API address")
-			.setDesc("Only change this if you are pointing at your own deployment.")
-			.addText((text) =>
-				text
-					.setPlaceholder(DEFAULT_SETTINGS.cymoseApiUrl)
-					.setValue(this.plugin.settings.cymoseApiUrl)
-					.onChange(async (value) => {
-						this.plugin.settings.cymoseApiUrl = value.trim() || DEFAULT_SETTINGS.cymoseApiUrl;
+						s.folder = value.trim();
 						await this.plugin.saveSettings();
 					}),
 			);
 
 		new Setting(containerEl)
-			.setName("System prompt")
-			.setDesc("Sent at the top of every branch.")
-			.addTextArea((text) => {
-				text.inputEl.rows = 4;
-				text
-					.setValue(this.plugin.settings.systemPrompt)
-					.onChange(async (value) => {
-						this.plugin.settings.systemPrompt = value;
-						await this.plugin.saveSettings();
-					});
-			});
-
-		// Kicked off after the tab is drawn, not before: a slow network should
-		// delay the catalogue, never the settings screen. It re-renders if it
-		// finds something new.
-		void this.plugin.refreshCatalogue().then((updated) => {
-			if (updated && this.containerEl.isConnected) this.display();
-		});
-	}
-
-	/**
-	 * Which model answers, and what it will take out of your allowance.
-	 *
-	 * The costs come from the server, never from this repository — see models.ts
-	 * for why. When there is no catalogue to show (own key, or a first run
-	 * offline) the dropdown falls back to bare ids, which is exactly what this
-	 * setting offered before and no worse than it was.
-	 */
-	private modelSetting(containerEl: HTMLElement): void {
-		const { model, modelCatalogue, cymoseToken, apiKey } = this.plugin.settings;
-		const usingOwnKey = !cymoseToken.trim() && Boolean(apiKey.trim());
-		// A catalogue is only meaningful for turns Cymose is billing. On somebody
-		// else's key the tiers are ours and the bill is OpenRouter's, so showing
-		// our credit weights there would be describing a charge that never happens.
-		const catalogue = usingOwnKey ? [] : modelCatalogue;
-
-		const setting = new Setting(containerEl)
-			.setName("Model")
-			.setDesc(
-				catalogue.length
-					? "Free models cost no credits, on any plan. Free text as well, so a model released tomorrow works today."
-					: "Any model id. Free text, so a model released tomorrow works today.",
-			)
+			.setName("Max tokens per answer")
 			.addText((text) =>
-				text
-					.setPlaceholder(DEFAULT_SETTINGS.model)
-					.setValue(model)
-					.onChange(async (value) => {
-						this.plugin.settings.model = value.trim() || DEFAULT_SETTINGS.model;
-						await this.plugin.saveSettings();
-					}),
-			)
-			.addDropdown((drop) => {
-				drop.addOption("", catalogue.length ? "Pick a model…" : "Suggestions…");
-
-				if (catalogue.length) {
-					// Obsidian's dropdown has no group API, so the optgroups are
-					// built on its select directly. Worth it: three tiers in one
-					// flat list is a wall of names with numbers after them.
-					for (const group of groupByTier(catalogue)) {
-						const optgroup = drop.selectEl.createEl("optgroup");
-						optgroup.label = group.label;
-						for (const entry of group.models) {
-							optgroup.createEl("option", { value: entry.id, text: describe(entry) });
-						}
-					}
-				} else {
-					for (const id of FALLBACK_MODEL_IDS) drop.addOption(id, id);
-				}
-
-				drop.setValue("");
-				drop.onChange(async (value) => {
-					if (!value) return;
-					this.plugin.settings.model = value;
+				text.setValue(String(s.maxTokens)).onChange(async (value) => {
+					const parsed = Number.parseInt(value, 10);
+					s.maxTokens = Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_SETTINGS.maxTokens;
 					await this.plugin.saveSettings();
-					this.display();
-				});
-			});
-
-		// The one combination that fails outright, said here rather than after a
-		// turn is refused: Cymose's free models run on Cloudflare's binding, and
-		// OpenRouter has never heard of them.
-		if (usingOwnKey && isCymoseHostedModel(model)) {
-			setting.descEl.createEl("p", {
-				cls: "cymose-warning",
-				text: `“${model}” is a Cymose-hosted model and OpenRouter can't answer it. Pick one from the list, or sign in to Cymose above.`,
-			});
-		}
+				}),
+			);
 	}
-
 }

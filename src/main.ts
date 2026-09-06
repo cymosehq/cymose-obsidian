@@ -2,22 +2,20 @@ import {
 	addIcon,
 	App,
 	EventRef,
-	FuzzySuggestModal,
 	Menu,
+	normalizePath,
 	Notice,
 	Plugin,
 	requestUrl,
 	TFile,
 	WorkspaceLeaf,
 } from "obsidian";
-import { CymoseSettingTab, CymoseSettings, DEFAULT_SETTINGS } from "./settings";
-import { CymoseAdapter } from "./providers/cymose";
-import { OpenRouterAdapter } from "./providers/openrouter";
+import { CymoseSettingTab, CymoseSettings, DEFAULT_SETTINGS, parseSettings } from "./settings";
+import { createAdapter } from "./providers/create";
 import type { ModelAdapter } from "./providers/types";
-import { CymoseView, VIEW_TYPE } from "./view";
+import { CymoseOverlay, canvasFileOf } from "./view";
 import { appendNode, COLOR_USER, createCanvas, readCanvas, writeCanvas } from "./canvas";
-import { fetchTree, mirrorSubtree, roots, subtree, SyncError, type SyncNode } from "./sync";
-import { fetchCatalogue } from "./models";
+import { isCymoseHostedModel } from "./models";
 
 // Cymose for Obsidian.
 //
@@ -35,11 +33,8 @@ import { fetchCatalogue } from "./models";
 // Storage is the vault, in Obsidian's own format. If this plugin disappears
 // tomorrow, the conversations are still readable files.
 //
-// Where a turn goes depends on which credential is set: with a Cymose token it
-// goes to the Cymose API, which answers it and does not keep it (`ephemeral`);
-// with an OpenRouter key it goes straight to OpenRouter on that account. Either
-// way the conversation itself lives only in the vault — but "we never see it"
-// is not true of the account path and this file should not imply that it is.
+// A turn goes to the provider in settings, on the user's key. Cymose is not
+// in that path. The conversation itself lives only in the vault.
 
 /**
  * Bring a leaf into view, on every Obsidian this plugin claims to support.
@@ -60,8 +55,8 @@ function revealLeaf(app: App, leaf: WorkspaceLeaf): void {
 
 // The Cymose mark (shared/brand/mark-cyme.svg): an upside-down Y — a stem into a
 // filled node, two arms splaying into open ones. Registered as an Obsidian icon
-// so the ribbon button and the panel tab carry the logo instead of a generic
-// lucide glyph. addIcon wraps this in <svg viewBox="0 0 100 100">, so the artwork
+// so the ribbon button carries the logo instead of a generic lucide glyph.
+// addIcon wraps this in <svg viewBox="0 0 100 100">, so the artwork
 // (drawn on a 64 grid) is scaled up by 100/64 = 1.5625 and stroked in
 // currentColor, which makes it follow the theme like every built-in icon does.
 export const CYMOSE_ICON = "cymose-mark";
@@ -77,23 +72,26 @@ const CYMOSE_ICON_SVG =
 
 export default class CymosePlugin extends Plugin {
 	settings: CymoseSettings = DEFAULT_SETTINGS;
+	private overlays = new WeakMap<WorkspaceLeaf, CymoseOverlay>();
+	private overlayLeaves = new Set<WorkspaceLeaf>();
 
 	async onload(): Promise<void> {
-		this.settings = Object.assign({}, DEFAULT_SETTINGS, (await this.loadData()) as Partial<CymoseSettings>);
+		this.settings = parseSettings(await this.loadData());
+		if (isCymoseHostedModel(this.settings.model)) {
+			this.settings.model = DEFAULT_SETTINGS.model;
+			await this.saveSettings();
+		}
 
-		// Register the logo before anything references it — the ribbon button and
-		// the panel tab both ask for it by id.
 		addIcon(CYMOSE_ICON, CYMOSE_ICON_SVG);
 
-		this.registerView(VIEW_TYPE, (leaf) => new CymoseView(leaf, this));
 		this.addSettingTab(new CymoseSettingTab(this.app, this));
 
-		this.addRibbonIcon(CYMOSE_ICON, "Cymose", () => void this.openPanel());
+		this.addRibbonIcon(CYMOSE_ICON, "Cymose", () => void this.openCymose());
 
 		this.addCommand({
-			id: "open-panel",
-			name: "Open panel",
-			callback: () => void this.openPanel(),
+			id: "open-cymose",
+			name: "Open conversation",
+			callback: () => void this.openCymose(),
 		});
 		this.addCommand({
 			id: "new-conversation",
@@ -101,27 +99,19 @@ export default class CymosePlugin extends Plugin {
 			callback: () => void this.newConversation(),
 		});
 		this.addCommand({
-			id: "pull-from-web",
-			// No "Cymose" in the name: the palette already shows the plugin name
-			// next to it, so the old wording read "Cymose: Pull a tree from
-			// Cymose Web".
-			name: "Pull a tree from the web",
-			callback: () => void this.pullFromWeb(),
-		});
-		this.addCommand({
 			id: "explore-3-ways",
 			name: "Explore 3 ways",
-			callback: () => void this.inPanel((view) => view.explore()),
+			callback: () => void this.withOverlay((overlay) => overlay.explore()),
 		});
 		this.addCommand({
 			id: "promote-branch",
 			name: "Promote this branch into the node it forked from",
-			callback: () => void this.inPanel((view) => view.promote()),
+			callback: () => void this.withOverlay((overlay) => overlay.promote()),
 		});
 		this.addCommand({
 			id: "pin-note",
 			name: "Pin a note to the selected node",
-			callback: () => void this.inPanel((view) => view.pinNote()),
+			callback: () => void this.withOverlay((overlay) => overlay.pinNote()),
 		});
 		this.registerCanvasMenu();
 
@@ -135,10 +125,100 @@ export default class CymosePlugin extends Plugin {
 				return true;
 			},
 		});
+
+		this.registerEvent(this.app.workspace.on("layout-change", () => this.syncOverlays()));
+		this.registerEvent(this.app.workspace.on("active-leaf-change", () => this.syncOverlays()));
+		this.app.workspace.onLayoutReady(() => {
+			this.app.workspace.detachLeavesOfType("cymose-panel");
+			this.syncOverlays();
+		});
 	}
 
 	onunload(): void {
-		// Leaves are Obsidian's to clean up; nothing of ours outlives the app.
+		for (const leaf of this.overlayLeaves) {
+			this.overlays.get(leaf)?.detach();
+		}
+		this.overlayLeaves.clear();
+	}
+
+	/** Conversations live in the configured folder. Composer docks only there. */
+	isCymoseCanvas(file: TFile): boolean {
+		const folder = normalizePath(this.settings.folder || "Cymose");
+		const path = normalizePath(file.path);
+		return path === folder || path.startsWith(`${folder}/`);
+	}
+
+	private syncOverlays(): void {
+		const live = new Set<WorkspaceLeaf>();
+		for (const leaf of this.app.workspace.getLeavesOfType("canvas")) {
+			const file = canvasFileOf(leaf);
+			if (!file || !this.isCymoseCanvas(file)) continue;
+			live.add(leaf);
+			let overlay = this.overlays.get(leaf);
+			if (!overlay) {
+				overlay = new CymoseOverlay(this, leaf);
+				this.overlays.set(leaf, overlay);
+			}
+			overlay.bind(file);
+		}
+		for (const leaf of this.overlayLeaves) {
+			if (live.has(leaf)) continue;
+			this.overlays.get(leaf)?.detach();
+			this.overlays.delete(leaf);
+		}
+		this.overlayLeaves = live;
+	}
+
+	activeOverlay(): CymoseOverlay | null {
+		const active = this.app.workspace.activeLeaf;
+		if (active) {
+			const overlay = this.overlays.get(active);
+			if (overlay) return overlay;
+		}
+		for (const leaf of this.overlayLeaves) {
+			const overlay = this.overlays.get(leaf);
+			if (overlay) return overlay;
+		}
+		return null;
+	}
+
+	/**
+	 * Enter Cymose: a canvas in the main pane, composer on it.
+	 *
+	 * Reuses an already-open conversation if there is one; otherwise starts a
+	 * new canvas. Never a sidebar.
+	 */
+	async openCymose(): Promise<void> {
+		const active = this.app.workspace.getActiveFile();
+		if (active && this.isCymoseCanvas(active)) {
+			this.syncOverlays();
+			this.activeOverlay()?.focusPrompt();
+			return;
+		}
+		for (const leaf of this.app.workspace.getLeavesOfType("canvas")) {
+			const file = canvasFileOf(leaf);
+			if (!file || !this.isCymoseCanvas(file)) continue;
+			revealLeaf(this.app, leaf);
+			this.syncOverlays();
+			this.overlays.get(leaf)?.focusPrompt();
+			return;
+		}
+		await this.newConversation();
+	}
+
+	private async withOverlay(action: (overlay: CymoseOverlay) => void | Promise<void>): Promise<void> {
+		this.syncOverlays();
+		let overlay = this.activeOverlay();
+		if (!overlay) {
+			await this.openCymose();
+			this.syncOverlays();
+			overlay = this.activeOverlay();
+		}
+		if (!overlay) {
+			new Notice("Cymose: open a conversation canvas first.");
+			return;
+		}
+		await action(overlay);
 	}
 
 	/**
@@ -169,19 +249,16 @@ export default class CymosePlugin extends Plugin {
 				const id = typeof node?.id === "string" ? node.id : null;
 				if (!id) return;
 
-				const act = (action: (view: CymoseView) => void | Promise<void>) =>
-					void this.inPanel(async (view) => {
-						// The menu already said which node. Telling the panel is the
-						// whole point: every one of these used to open with "now go
-						// and pick the node you just right-clicked".
-						view.setTarget(id);
-						await action(view);
+				const act = (action: (overlay: CymoseOverlay) => void | Promise<void>) =>
+					void this.withOverlay(async (overlay) => {
+						overlay.setTarget(id);
+						await action(overlay);
 					});
 
 				menu.addSeparator();
 				menu.addItem((item) =>
 					item
-						.setTitle("Branch from here")
+						.setTitle("Reply here")
 						.setIcon(CYMOSE_ICON)
 						.onClick(() => act((view) => view.focusPrompt())),
 				);
@@ -208,147 +285,81 @@ export default class CymosePlugin extends Plugin {
 	}
 
 	/**
-	 * Which provider answers this turn.
+	 * Who answers this turn.
 	 *
-	 * Cymose first: it is the path that needs nothing but signing in, and its
-	 * free tier has the same allowance as the web app. A provider key is the
-	 * fallback for people who already have one and would rather spend it —
-	 * which also means someone who set a key up before this existed keeps
-	 * working exactly as they did, without being signed out or asked anything.
-	 *
-	 * Rebuilt per call rather than cached: either credential can change in
-	 * settings between turns, and a cached adapter would keep the old one.
+	 * The key in this vault, the provider in settings. Cymose is not a chat
+	 * provider. Rebuilt per call: the key can change between turns.
 	 */
 	adapter(): ModelAdapter {
-		if (this.settings.cymoseToken.trim()) {
-			return new CymoseAdapter(this.settings.cymoseApiUrl, this.settings.cymoseToken);
-		}
-		return new OpenRouterAdapter(this.settings.apiKey);
+		return createAdapter(this.settings);
 	}
 
-	/** True when neither path is configured — the one state that can't answer. */
 	needsSetup(): boolean {
-		return !this.settings.cymoseToken.trim() && !this.settings.apiKey.trim();
+		if (this.settings.provider === "custom") return !this.settings.baseUrl.trim();
+		return !this.settings.apiKey.trim();
 	}
 
-	/**
-	 * Does this token work, and what does it get you?
-	 *
-	 * Answered here rather than by the first failed turn. A rejected credential
-	 * surfaces as a provider error somewhere inside a stream, which reads as a
-	 * broken model — so the setting people go back and change is the model, and
-	 * the plugin keeps not working for a reason it already knew.
-	 *
-	 * /v1/credits is the right question to ask: it is authenticated, it costs
-	 * nothing, and its answer is the other thing somebody setting this up wants
-	 * to know.
-	 */
-	async testConnection(): Promise<{ ok: boolean; message: string }> {
-		const token = this.settings.cymoseToken.trim();
-		if (!token) {
-			return { ok: false, message: "No token yet. Follow the four steps above, then paste it in." };
+	async testProvider(): Promise<{ ok: boolean; message: string }> {
+		const { provider, apiKey, baseUrl } = this.settings;
+		if (provider !== "custom" && !apiKey.trim()) {
+			return { ok: false, message: "No key yet." };
 		}
-		// Caught before the round trip, because the mistake it catches is the
-		// most likely one: pasting the old kind of credential, or half of one.
-		if (!token.startsWith("cym_")) {
-			return {
-				ok: false,
-				message:
-					"That doesn't look like a Cymose token — they start with “cym_”. If you copied a long string beginning “eyJ”, that's a browser session and it expires within the hour. Create a proper token in Settings → Connected apps.",
-			};
+		if (provider === "custom" && !baseUrl.trim()) {
+			return { ok: false, message: "No base URL yet." };
 		}
 
-		const base = this.settings.cymoseApiUrl.trim().replace(/\/+$/, "");
+		const url =
+			provider === "openai"
+				? "https://api.openai.com/v1/models"
+				: provider === "anthropic"
+					? "https://api.anthropic.com/v1/models"
+					: provider === "google"
+						? "https://generativelanguage.googleapis.com/v1beta/openai/models"
+						: provider === "custom"
+							? `${baseUrl.trim().replace(/\/+$/, "")}/models`
+							: "https://openrouter.ai/api/v1/key";
+
+		const headers: Record<string, string> = {};
+		if (apiKey.trim()) {
+			if (provider === "anthropic") {
+				headers["x-api-key"] = apiKey.trim();
+				headers["anthropic-version"] = "2023-06-01";
+			} else {
+				headers.Authorization = `Bearer ${apiKey.trim()}`;
+			}
+		}
+
 		let response;
 		try {
-			// requestUrl, not fetch: Obsidian's helper isn't subject to the
-			// renderer's CORS rules. Same reason models.ts and sync.ts use it.
-			response = await requestUrl({
-				url: `${base}/v1/credits`,
-				method: "GET",
-				headers: { Authorization: `Bearer ${token}` },
-				throw: false,
-			});
+			response = await requestUrl({ url, method: "GET", headers, throw: false });
 		} catch (error) {
-			return { ok: false, message: `Couldn't reach ${base} — ${(error as Error).message}` };
+			return { ok: false, message: `Couldn't reach the provider — ${(error as Error).message}` };
 		}
-
-		if (response.status === 401) {
-			return { ok: false, message: "Cymose rejected that token. It may have been revoked — create a new one." };
-		}
-		if (response.status === 503) {
-			return { ok: false, message: "This Cymose deployment doesn't have API tokens turned on yet." };
+		if (response.status === 401 || response.status === 403) {
+			return { ok: false, message: "The provider rejected that key." };
 		}
 		if (response.status >= 400) {
-			return { ok: false, message: `Cymose answered ${response.status}.` };
+			return { ok: false, message: `Provider answered ${response.status}.` };
 		}
-
-		const body = response.json as { plan?: string } | null;
-		const plan = body?.plan ? ` You're on the ${body.plan} plan.` : "";
-		return { ok: true, message: `Connected.${plan} Open the panel and ask something.` };
+		return { ok: true, message: "Connected. Type any model id in the composer." };
 	}
 
 	async saveSettings(): Promise<void> {
 		await this.saveData(this.settings);
 	}
 
-	/**
-	 * Reads the lineup from the API, at most once a day.
-	 * Returns true if the catalogue was updated.
-	 */
-	async refreshCatalogue(): Promise<boolean> {
-		const { cymoseToken, cymoseApiUrl, modelCatalogueAt, modelCatalogue } = this.settings;
-		if (!cymoseToken.trim()) return false;
-		if (modelCatalogue.length && Date.now() - modelCatalogueAt < 24 * 60 * 60 * 1000) return false;
-
-		try {
-			const models = await fetchCatalogue(cymoseApiUrl, cymoseToken);
-			this.settings.modelCatalogue = models;
-			this.settings.modelCatalogueAt = Date.now();
-			await this.saveSettings();
-			return true;
-		} catch {
-			return false;
-		}
+	private async openCanvasFile(file: TFile): Promise<void> {
+		const leaf = this.app.workspace.getMostRecentLeaf() ?? this.app.workspace.getLeaf(false);
+		await leaf.openFile(file);
+		this.syncOverlays();
+		this.overlays.get(leaf)?.focusPrompt();
 	}
 
-	async openPanel(): Promise<CymoseView | null> {
-		const existing = this.app.workspace.getLeavesOfType(VIEW_TYPE);
-		if (existing.length > 0) {
-			revealLeaf(this.app, existing[0]);
-			return existing[0].view as CymoseView;
-		}
-		const leaf: WorkspaceLeaf | null = this.app.workspace.getRightLeaf(false);
-		if (!leaf) return null;
-		await leaf.setViewState({ type: VIEW_TYPE, active: true });
-		revealLeaf(this.app, leaf);
-		return leaf.view as CymoseView;
-	}
-
-	/**
-	 * Runs a panel action from the command palette.
-	 *
-	 * These actions need the panel's state — which node you are branching from,
-	 * what is in the prompt box — so the command opens the panel and asks it,
-	 * rather than keeping a second copy of that state up here that could
-	 * disagree with what the user is looking at.
-	 */
-	private async inPanel(action: (view: CymoseView) => void | Promise<void>): Promise<void> {
-		const panel = await this.openPanel();
-		if (!panel) {
-			new Notice("Cymose: couldn't open the panel.");
-			return;
-		}
-		await action(panel);
-	}
-
-	/** Creates an empty canvas, opens it, and points the panel at it. */
+	/** Creates an empty canvas and opens it in the main pane. */
 	async newConversation(title = "Conversation"): Promise<TFile | null> {
 		try {
 			const file = await createCanvas(this.app.vault, this.settings.folder, title);
-			await this.app.workspace.getLeaf(true).openFile(file);
-			const panel = await this.openPanel();
-			await panel?.openFile(file);
+			await this.openCanvasFile(file);
 			return file;
 		} catch (error) {
 			new Notice(`Cymose: ${(error as Error).message}`);
@@ -357,73 +368,7 @@ export default class CymosePlugin extends Plugin {
 	}
 
 	/**
-	 * Mirrors a tree planned on the web onto a canvas here.
-	 *
-	 * This is the point of the two products being one product. The plan lives
-	 * in the browser — you sketch it, branch it three ways, promote what held
-	 * up — and then you come to Obsidian to write the thing out properly. Until
-	 * now that meant retyping it, which is the copy-paste this whole product
-	 * exists to abolish.
-	 *
-	 * Reading only. Nothing in the vault goes back up, and a mirrored node you
-	 * edit here stays here.
-	 */
-	async pullFromWeb(): Promise<void> {
-		const { cymoseApiUrl, cymoseToken } = this.settings;
-		if (!cymoseToken.trim()) {
-			new Notice("Cymose: add your access token in settings first.");
-			return;
-		}
-
-		let picks: SyncNode[];
-		let tree;
-		try {
-			new Notice("Cymose: reading your web tree…");
-			tree = await fetchTree(cymoseApiUrl, cymoseToken);
-			picks = roots(tree);
-		} catch (error) {
-			// SyncError messages are written to be shown; anything else is a bug
-			// and says so rather than pretending to be advice.
-			new Notice(
-				error instanceof SyncError
-					? `Cymose: ${error.message}`
-					: `Cymose: pull failed — ${(error as Error).message}`,
-			);
-			return;
-		}
-
-		if (!picks.length) {
-			new Notice("Cymose: nothing to pull — there are no chats on the web yet.");
-			return;
-		}
-
-		new RootPicker(this, picks, async (root) => {
-			try {
-				const nodes = subtree(tree, root.id);
-				const file = await createCanvas(this.app.vault, this.settings.folder, root.title || "Cymose tree");
-				const data = await readCanvas(this.app.vault, file);
-				const map = (this.settings.syncMap[file.path] ??= {});
-				const { added } = mirrorSubtree(data, nodes, map);
-				await writeCanvas(this.app.vault, file, data);
-				await this.saveSettings();
-				await this.app.workspace.getLeaf(true).openFile(file);
-				const panel = await this.openPanel();
-				await panel?.openFile(file);
-				new Notice(`Cymose: pulled ${added} node${added === 1 ? "" : "s"}.`);
-			} catch (error) {
-				new Notice(`Cymose: ${(error as Error).message}`);
-			}
-		}).open();
-	}
-
-	/**
 	 * Opens a conversation seeded with the current note.
-	 *
-	 * This is the reason the plugin belongs in Obsidian rather than anywhere
-	 * else: the note is already the thinking, and the canvas is where it gets
-	 * pushed further. The note is embedded as a `![[wikilink]]` in the first
-	 * node, so the conversation stays linked to it in the graph view and keeps
-	 * working if the note is later renamed.
 	 */
 	async conversationFromNote(note: TFile): Promise<void> {
 		const file = await this.newConversation(note.basename);
@@ -436,38 +381,6 @@ export default class CymosePlugin extends Plugin {
 			COLOR_USER,
 		);
 		await writeCanvas(this.app.vault, file, data);
-		const panel = await this.openPanel();
-		await panel?.openFile(file);
-	}
-}
-
-/**
- * Which tree to pull.
- *
- * A picker rather than "pull everything": an account can hold dozens of
- * unrelated chats, and dumping all of them into one vault folder is not a
- * feature, it is a mess someone has to clean up by hand.
- */
-class RootPicker extends FuzzySuggestModal<SyncNode> {
-	constructor(
-		plugin: CymosePlugin,
-		private roots: SyncNode[],
-		private onPick: (root: SyncNode) => void,
-	) {
-		super(plugin.app);
-		this.setPlaceholder("Which tree?");
-	}
-
-	getItems(): SyncNode[] {
-		return this.roots;
-	}
-
-	getItemText(root: SyncNode): string {
-		const branches = root.promoted_digest?.trim() ? " · has promoted conclusions" : "";
-		return `${root.title || "Untitled"}${branches}`;
-	}
-
-	onChooseItem(root: SyncNode): void {
-		this.onPick(root);
+		this.syncOverlays();
 	}
 }
