@@ -10,40 +10,26 @@ single line.
 
 ## Getting started
 
-- **Paste a token and it works.** Create one at
-  [web.cymose.app](https://web.cymose.app) under Settings → Connected apps.
-  A Cymose account on the free tier gets the same
-  allowance as the web app; a plan raises it. One account, one bill, the same
-  credits whether you're on a canvas in a browser or a canvas in your vault.
-  Nothing here is behind a plan — paying raises limits and unlocks the stronger
-  models, it doesn't unlock features. The default model costs no credits at all.
-- **Bringing your own key is the second path, not the first.** Paste an
-  [OpenRouter](https://openrouter.ai) key instead and turns go straight to
-  OpenRouter on your account, spending your provider credit rather than Cymose
-  credits. Both work; the key wins if both are set, so nobody who set one up
-  before this existed is signed out or asked anything.
-- **Cymose Web sync reads only.** The same account also lets you pull a tree
-  you planned in the browser onto a canvas here (see [Pull a tree from the
-  web](#pull-a-tree-from-the-web)). One-directional: nothing in your vault is
-  uploaded. Writing back is a later milestone.
+- **Paste a provider key and it works.** Settings → Cymose: pick OpenRouter,
+  OpenAI, Anthropic, Google, or any OpenAI-compatible endpoint (Ollama, LM
+  Studio, Groq…). Turns go from this machine to that provider on your account.
+  Cymose is not in that path and does not see the conversation. Type any text
+  or multimodal model id in the composer — the suggestions are shortcuts, not
+  a closed list.
 
 ## What this plugin can do to you
 
 The short version, because you are about to give a plugin a credential and let
 it write files in your vault. Every line of it is checkable against the source,
-which is nine files and about 2,250 lines, comments included.
+which is twelve files and about 2,340 lines, comments included.
 
 - **What it writes:** `.canvas` files in your conversations folder, and its own
   settings. It never modifies a note. Pinning a note reads it; the embed goes
   into the canvas, not into the note.
-- **Where a turn goes:** to Cymose if you signed in, or to OpenRouter if you
-  set a key. One of the two, never both, and nowhere else. No analytics, no
-  telemetry, no third host.
-- **What is kept:** not the conversation. Turns are sent with `ephemeral` set,
-  which means the API answers them and stores no workspace and no messages —
-  what it records is that a turn happened, because that is what bills your
-  credits. On an OpenRouter key we are not in the path at all and OpenRouter's
-  retention policy is the one that applies.
+- **Where a turn goes:** to the provider you picked, on the key you pasted.
+  Nowhere else. No Cymose chat API, no analytics, no telemetry, no third host.
+- **What is kept:** not the conversation. The provider's retention policy is
+  the one that applies. Cymose never sees the messages.
 - **What survives us:** everything. A conversation is a JSON Canvas file in
   your vault, in Obsidian's own format. Uninstall the plugin and the
   conversations are still there and still readable.
@@ -77,7 +63,10 @@ node.
 
 That one decision buys most of the product:
 
-- **Branching is free.** Fork from any node — the canvas is already a graph.
+- **Branching is the canvas.** Click a card and Send — the reply hangs under
+  it as a child. Draw an arrow yourself between cards you wrote: that is the
+  same branch. There is no special "branch mode." Explore 3 is three sibling
+  replies, not how you fork.
 - **Context inherits down the branch.** A turn is sent with the chain from that
   node up to the root, so a fork carries everything above it and nothing beside
   it. Sibling branches stay invisible to each other, which is the point.
@@ -87,25 +76,14 @@ That one decision buys most of the product:
 
 ## Use it
 
-1. Get a token: sign in at [web.cymose.app](https://web.cymose.app), open
-   **Settings → Connected apps**, create one, and copy it — it is shown once.
-   Then Settings → Cymose → paste it, and press **Test** to check it took. (Or
-   paste an OpenRouter key instead, if you would rather spend that.)
-2. Command palette → **Cymose: New conversation** (or **Start a conversation
-   about this note**, which embeds the note in the first node so the canvas
-   stays linked in your graph).
-3. Type in the panel, press Enter. Your message becomes a node, and the answer
-   node appears under it straight away and fills in front of you — on the
-   canvas, and in the panel's thread at the same time.
-4. The panel reads as a conversation: the chain from the root down to the node
-   you are pointed at, which is exactly the context the next turn is answered
-   against. The last message is what Send hangs off, and the line under it says
-   how many branches already do.
-5. To branch: click an earlier message in the thread, or a node on the canvas,
-   or right-click a node and choose **Branch from here** — then ask something
-   else. The new line inherits that node's history, not its siblings'. (If the
-   panel can't read your canvas selection it says so, and **Point somewhere
-   else** gives you a searchable list of every node instead.)
+1. Settings → Cymose → pick a provider, paste the key, press **Test**.
+2. Command palette → **Cymose: New conversation**, or press the Cymose ribbon
+   icon. A canvas opens in the main pane. Type in the composer at the bottom.
+3. Press Enter. Your message becomes a card; the answer hangs under it.
+4. Click a card to reply under it — the composer says which one. **New root**
+   starts another thread on the same canvas. Right-click a card for **Reply
+   here**, **Explore 3 ways**, **Promote**, or **Pin**. Promote and Pin live
+   on the card, not on the empty composer.
 
 ### Explore 3 ways
 
@@ -147,50 +125,22 @@ Resolved when the turn is sent, not when you pin it: edit the note and every
 branch below it is answered against the new text, without re-pinning anything.
 Notes are read, never written.
 
-### Pull a tree from the web
-
-Optional, and only if you also use Cymose on the web.
-
-1. Settings → Cymose → **Cymose token** — the same one from "Use it" above.
-2. Command palette → **Cymose: Pull a tree from Cymose Web**, then pick a tree.
-
-It writes a new canvas with the structure of that tree: each node's title, the
-conclusions promoted up from its branches, and the names of any notes pinned to
-it. Not the transcripts — a canvas of full conversations is unreadable at the
-zoom level where a tree is useful, and the export doesn't carry them anyway.
-
-Pulling the same tree again updates the nodes where they stand instead of
-adding a second copy, and anything you dragged keeps its position. Nodes
-deleted on the web are left alone: this is a mirror, not a replica, and
-deleting something out of your vault because a server stopped mentioning it is
-not a trade worth making.
-
 ## Which model, and what it costs
 
-Settings → Cymose → **Model**. Signed in, the dropdown is the live lineup read
-from your account, grouped into three tiers with what each turn costs beside it:
-free models that spend nothing on any plan, and two metered tiers above them.
-The list comes from the server, so a model added next month is offered without a
-plugin update, and this repository carries no price list to fall out of date.
+The composer takes any model id the provider accepts. Suggestions are a
+short list; type anything else. Temperature and instructions live there too.
+The bill is the provider's, per token, on your key.
 
-**The default is a free model**, and the free tier is a real one — the same
-models the web app leads with. You can use this plugin, including branching and
-Explore 3 ways, without spending anything.
+Two things worth knowing:
 
-Two things worth knowing before you pick a metered model:
+- **A long branch costs more each turn**, because that is how the provider
+  bills. Promoting then branching afresh at the fork point is a real saving as
+  well as a better conversation.
+- **Explore 3 ways is three turns.** Promote is one more.
 
-- **A turn is a turn.** On a Cymose account the cost is per turn and flat: it
-  does not grow with the length of the branch, so the fortieth turn on one line
-  costs exactly what the first did. What multiplies is the number of turns —
-  **Explore 3 ways is three of them**, and Promote is one more.
-- **On your own OpenRouter key it is per token**, because that is how OpenRouter
-  bills. There a long branch genuinely does cost more each turn, and promoting
-  then branching afresh at the fork point is a real saving as well as a better
-  conversation.
-
-Promote is worth doing either way: a branch opened at the fork point inherits
-five lines of conclusion instead of forty turns of transcript, and the model
-answers against what you decided rather than everything you said getting there.
+A branch opened at the fork point inherits five lines of conclusion instead of
+forty turns of transcript, and the model answers against what you decided
+rather than everything you said getting there.
 
 Anything missing or broken, [open an
 issue](https://github.com/cymosehq/cymose-obsidian/issues).
@@ -215,8 +165,8 @@ mkdir -p /path/to/vault/.obsidian/plugins/cymose
 mv main.js manifest.json styles.css /path/to/vault/.obsidian/plugins/cymose/
 ```
 
-Then enable it in Settings → Community plugins, and paste your Cymose token in
-Settings → Cymose.
+Then enable it in Settings → Community plugins, and paste a provider key
+in Settings → Cymose.
 
 ## Releasing
 

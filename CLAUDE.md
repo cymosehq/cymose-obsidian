@@ -24,8 +24,9 @@ one decision.
   convenience, not the plugin. Anywhere else, the answer is still no.
 - **The key goes to the provider and nowhere else.** No telemetry, no
   analytics, no "anonymous" usage ping. Ever.
-- **0.1 is BYOK.** Cymose Web sync is a later milestone; don't wire client code
-  to it without changing the README, which currently promises the opposite.
+- **Cymose is not a chat provider.** Turns go to the provider in settings on
+  the user's key. Do not add a Cymose chat adapter without changing the README,
+  which currently promises the opposite.
 
 ## Layout
 
@@ -33,11 +34,10 @@ one decision.
 - `src/canvas-api.ts` — the guarded bridge to the live canvas view: what is
   selected, and revealing a node. The only file allowed to know Obsidian's
   internals.
-- `src/providers/` — `ModelAdapter` and its implementations.
-- `src/view.ts` — the panel: the thread you are in, send, stream. The thread is
-  `ancestry` of the node you are pointed at, which is the same chain
-  `buildMessages` sends — so what you read is what the next turn is answered
-  against, and there is nothing to keep in step.
+- `src/providers/` — `ModelAdapter`. `create.ts` picks OpenRouter, OpenAI,
+  Anthropic, Google, or a custom OpenAI-compatible base URL.
+- `src/view.ts` — composer docked on the canvas view. Not a sidebar ItemView.
+  The board is the conversation; this file is send / stream / explore / promote.
 - `src/main.ts` — plugin lifecycle, commands.
 
 ## Commands
@@ -48,11 +48,6 @@ one decision.
 | `npm run build` | Typecheck (`tsc --noEmit`) then bundle |
 | `npm test` | Run the vitest suites (`src/*.test.ts`), watch mode |
 
-`src/canvas.ts`, `src/markers.ts` and `src/models.ts` are pure and have real
-vitest coverage (`canvas.test.ts`, `markers.test.ts`, `models.test.ts`) — CI
-runs `npm test -- --run` before the build. `src/view.ts` and the providers
-touch the DOM/network and would need mocking to be worth it.
-
-Keep network parsing separate from the network call, the way `readCatalogue`
-is split out of `fetchCatalogue`: the judgement about what a server sent is
-the part worth testing, and it should not need a socket to run.
+`src/canvas.ts`, `src/markers.ts` and `src/models.ts` are pure and have vitest
+coverage. CI runs `npm test -- --run` before the build. `src/view.ts` and the
+providers touch the DOM/network; those tests come next.
