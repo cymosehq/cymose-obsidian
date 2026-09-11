@@ -1,3 +1,5 @@
+import { explainMissingModel } from "../models";
+
 export type Message = { role: "system" | "user" | "assistant"; content: string };
 
 export type ModelOptions = {
@@ -36,6 +38,8 @@ export class ProviderError extends Error {
 
 	/** A human sentence, since this ends up in a Notice. */
 	get friendly(): string {
+		const missing = explainMissingModel(this.message);
+		if (missing) return missing;
 		switch (this.status) {
 			case 401:
 				return "That API key was rejected. Check it in Cymose settings.";

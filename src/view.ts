@@ -92,6 +92,7 @@ export class CymoseOverlay {
 	private host: HTMLElement | null = null;
 	private hintEl!: HTMLElement;
 	private setupEl!: HTMLElement;
+	private setupText!: HTMLElement;
 	private errorBox!: HTMLElement;
 	private modelInput!: HTMLInputElement;
 	private modelList!: HTMLDataListElement;
@@ -166,10 +167,7 @@ export class CymoseOverlay {
 
 	private build(root: HTMLElement): void {
 		this.setupEl = root.createDiv({ cls: "cymose-setup" });
-		this.setupEl.createDiv({
-			cls: "cymose-setup-text",
-			text: "Add a provider key to send. Turns go from this vault to that provider — Cymose never sees them.",
-		});
+		this.setupText = this.setupEl.createDiv({ cls: "cymose-setup-text" });
 		const setupBtn = this.setupEl.createEl("button", { cls: "mod-cta cymose-setup-btn", text: "Open settings" });
 		setupBtn.onclick = () => this.openPluginSettings();
 
@@ -321,16 +319,32 @@ export class CymoseOverlay {
 	private populateModels(): void {
 		if (!this.modelInput || !this.modelList) return;
 		const { model, provider } = this.plugin.settings;
+		if (provider === "custom") {
+			this.modelInput.placeholder = "id from ollama list";
+			void this.plugin.listModels().then((ids) => this.fillModelList(ids, model));
+			return;
+		}
+		this.modelInput.placeholder = "Model id";
+		this.fillModelList(suggestedModels(provider), model);
+	}
+
+	private fillModelList(ids: string[], model: string): void {
+		if (!this.modelInput || !this.modelList) return;
 		this.modelList.empty();
 		const known = new Set<string>();
-		for (const id of suggestedModels(provider)) {
+		for (const id of ids) {
 			this.modelList.createEl("option", { value: id, text: shortModelLabel(id) });
 			known.add(id);
 		}
 		if (model && !known.has(model)) {
 			this.modelList.createEl("option", { value: model });
 		}
-		this.modelInput.value = model;
+		if (document.activeElement !== this.modelInput) this.modelInput.value = model;
+		if (ids.length && model && !known.has(model) && (model.includes("/") || model === "llama3.2")) {
+			this.plugin.settings.model = ids[0];
+			this.modelInput.value = ids[0];
+			void this.plugin.saveSettings();
+		}
 	}
 
 	private syncTemperature(): void {
@@ -355,18 +369,31 @@ export class CymoseOverlay {
 		this.prompt.style.height = `${Math.min(this.prompt.scrollHeight, 160)}px`;
 	}
 
+	/** Settings changed while this dock is already mounted. */
+	onSettingsChanged(): void {
+		this.refreshSetup();
+	}
+
 	private refreshSetup(): void {
 		if (!this.setupEl) return;
 		const needs = this.plugin.needsSetup();
 		this.setupEl.toggleClass("is-hidden", !needs);
-		this.prompt.disabled = needs || this.sending;
+		this.setupText.setText(
+			this.plugin.settings.provider === "custom"
+				? "Add the server address in settings to send. Local Ollama does not need a key."
+				: "Add a provider key to send. Turns go from this vault to that provider — Cymose never sees them.",
+		);
+		// Missing credentials only block Send. Locking the prompt made the
+		// first visit look broken: you open settings, pick Ollama, come back,
+		// and still cannot type because this dock never re-checked.
+		this.prompt.disabled = this.sending;
+		this.modelInput.disabled = this.sending;
+		this.tempInput.disabled = this.sending;
+		this.instructions.disabled = this.sending;
 		this.sendButton.disabled = needs || this.sending;
 		this.exploreButton.disabled = needs || this.sending;
-		this.modelInput.disabled = needs || this.sending;
-		this.tempInput.disabled = needs || this.sending;
-		this.instructions.disabled = needs || this.sending;
 		if (this.newRootButton) this.newRootButton.disabled = !this.parentId || this.sending;
-		this.populateModels();
+		if (document.activeElement !== this.modelInput) this.populateModels();
 		this.syncTemperature();
 		if (!this.sending && this.instructions && document.activeElement !== this.instructions) {
 			this.instructions.value = this.plugin.settings.systemPrompt;
@@ -436,7 +463,7 @@ export class CymoseOverlay {
 		if (this.plugin.needsSetup()) {
 			this.refreshSetup();
 			this.openPluginSettings();
-			new Notice("Cymose: add a provider key in settings.");
+			new Notice("Cymose: finish setup in settings — a key, or a local server address.");
 			return false;
 		}
 		return true;

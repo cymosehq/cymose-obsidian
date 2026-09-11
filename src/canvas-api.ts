@@ -75,9 +75,6 @@ function canvasOf(leaf: WorkspaceLeaf | null): InternalCanvas | null {
  * exactly one is open and a guess when several are.
  */
 function activeCanvas(app: App): InternalCanvas | null {
-	const direct = canvasOf(app.workspace.activeLeaf ?? null);
-	if (direct) return direct;
-
 	const recent = attempt(() => canvasOf(app.workspace.getMostRecentLeaf() ?? null));
 	if (recent) return recent;
 

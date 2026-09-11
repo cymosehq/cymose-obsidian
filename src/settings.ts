@@ -103,9 +103,10 @@ export class CymoseSettingTab extends PluginSettingTab {
 				drop.setValue(s.provider);
 				drop.onChange(async (value) => {
 					s.provider = value as ProviderId;
-					const suggestions = suggestedModels(s.provider);
-					if (suggestions.length && !suggestions.includes(s.model)) {
-						s.model = suggestions[0];
+					const live =
+						s.provider === "custom" ? await this.plugin.listModels() : suggestedModels(s.provider);
+					if (live.length && !live.includes(s.model)) {
+						s.model = live[0];
 					}
 					await this.plugin.saveSettings();
 					this.display();
@@ -115,7 +116,7 @@ export class CymoseSettingTab extends PluginSettingTab {
 		if (s.provider === "custom") {
 			new Setting(containerEl)
 				.setName("Base URL")
-				.setDesc("OpenAI-compatible chat completions root. Ollama is usually http://127.0.0.1:11434/v1")
+				.setDesc("OpenAI-compatible chat completions root. Ollama is usually http://127.0.0.1:11434/v1 — then pick a name from `ollama list` in the composer.")
 				.addText((text) =>
 					text
 						.setPlaceholder("http://127.0.0.1:11434/v1")

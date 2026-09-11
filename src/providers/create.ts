@@ -56,7 +56,7 @@ export const SUGGESTED_MODELS: Record<ProviderId, string[]> = {
 	openai: ["gpt-5.4", "gpt-4.1", "gpt-4o", "o4-mini"],
 	anthropic: ["claude-sonnet-4-5", "claude-haiku-4-5", "claude-opus-4-5"],
 	google: ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash"],
-	custom: ["llama3.2", "qwen2.5", "gpt-4o"],
+	custom: [],
 };
 
 export function suggestedModels(provider: ProviderId): string[] {

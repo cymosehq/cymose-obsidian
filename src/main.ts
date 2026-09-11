@@ -11,11 +11,11 @@ import {
 	WorkspaceLeaf,
 } from "obsidian";
 import { CymoseSettingTab, CymoseSettings, DEFAULT_SETTINGS, parseSettings } from "./settings";
-import { createAdapter } from "./providers/create";
+import { createAdapter, suggestedModels } from "./providers/create";
 import type { ModelAdapter } from "./providers/types";
 import { CymoseOverlay, canvasFileOf } from "./view";
 import { appendNode, COLOR_USER, createCanvas, readCanvas, writeCanvas } from "./canvas";
-import { isCymoseHostedModel } from "./models";
+import { isCymoseHostedModel, readModelIds } from "./models";
 
 // Cymose for Obsidian.
 //
@@ -170,7 +170,7 @@ export default class CymosePlugin extends Plugin {
 	}
 
 	activeOverlay(): CymoseOverlay | null {
-		const active = this.app.workspace.activeLeaf;
+		const active = this.app.workspace.getMostRecentLeaf();
 		if (active) {
 			const overlay = this.overlays.get(active);
 			if (overlay) return overlay;
@@ -299,6 +299,38 @@ export default class CymosePlugin extends Plugin {
 		return !this.settings.apiKey.trim();
 	}
 
+	/**
+	 * Model ids this endpoint will actually answer.
+	 *
+	 * For a local server the hardcoded "llama3.2" is a guess, and Ollama
+	 * rejects it unless that exact tag is pulled. Ask the server instead.
+	 */
+	async listModels(): Promise<string[]> {
+		if (this.settings.provider !== "custom") return suggestedModels(this.settings.provider);
+
+		const base = this.settings.baseUrl.trim().replace(/\/+$/, "");
+		if (!base) return [];
+		const key = this.settings.apiKey.trim();
+		const headers: Record<string, string> = {};
+		if (key) headers.Authorization = `Bearer ${key}`;
+
+		const urls = [`${base}/models`];
+		const root = base.replace(/\/v1$/i, "");
+		if (root !== base) urls.push(`${root}/api/tags`);
+
+		for (const url of urls) {
+			try {
+				const response = await requestUrl({ url, method: "GET", headers, throw: false });
+				if (response.status >= 400) continue;
+				const ids = readModelIds(response.json);
+				if (ids.length) return ids;
+			} catch {
+				/* try the next shape */
+			}
+		}
+		return [];
+	}
+
 	async testProvider(): Promise<{ ok: boolean; message: string }> {
 		const { provider, apiKey, baseUrl } = this.settings;
 		if (provider !== "custom" && !apiKey.trim()) {
@@ -346,6 +378,9 @@ export default class CymosePlugin extends Plugin {
 
 	async saveSettings(): Promise<void> {
 		await this.saveData(this.settings);
+		for (const leaf of this.overlayLeaves) {
+			this.overlays.get(leaf)?.onSettingsChanged();
+		}
 	}
 
 	private async openCanvasFile(file: TFile): Promise<void> {
