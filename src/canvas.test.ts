@@ -26,8 +26,8 @@ import {
 
 describe("Canvas Layout & Utils", () => {
 	it("estimates height based on text length", () => {
-		expect(estimateHeight("")).toBe(120); // MIN_HEIGHT
-		expect(estimateHeight("Short line")).toBe(120);
+		expect(estimateHeight("")).toBe(72); // MIN_HEIGHT
+		expect(estimateHeight("Short line")).toBe(72);
 		
 		const longText = Array(20).fill("This is a fairly long line that wraps.").join("\n");
 		expect(estimateHeight(longText)).toBeGreaterThan(120);
@@ -59,7 +59,7 @@ describe("appendNode placement", () => {
 	it("steps clear of an unrelated node sitting where the new one would go", () => {
 		const data = emptyCanvas();
 		const root = appendNode(data, null, "Root", "6");
-		const row = root.y + root.height + 80; // ROW_GAP
+		const row = root.y + root.height + 36; // ROW_GAP
 
 		// Something already occupying the spot directly under the root — another
 		// conversation on the same canvas, or a node the user dragged there.
@@ -68,15 +68,15 @@ describe("appendNode placement", () => {
 			type: "text",
 			x: root.x,
 			y: row,
-			width: 420,
-			height: 120,
+			width: 360,
+			height: 72,
 			text: "in the way",
 		});
 
 		const child = appendNode(data, root.id, "child", "5");
 		expect(child.y).toBe(row);
 		// Not on top of it: either clear to the right, or clear to the left.
-		const clear = child.x >= 420 + root.x || child.x + 420 <= root.x;
+		const clear = child.x >= 360 + root.x || child.x + 360 <= root.x;
 		expect(clear).toBe(true);
 	});
 });

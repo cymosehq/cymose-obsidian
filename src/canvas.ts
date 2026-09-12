@@ -35,22 +35,21 @@ export type CanvasEdge = {
 
 export type CanvasData = { nodes: CanvasNode[]; edges: CanvasEdge[] };
 
-export const NODE_WIDTH = 420;
+export const NODE_WIDTH = 360;
 /** Height of a fresh node. Obsidian doesn't auto-fit, so we estimate from the
  *  text length rather than leaving long answers clipped. */
-const MIN_HEIGHT = 120;
+const MIN_HEIGHT = 72;
 const MAX_HEIGHT = 640;
-const COLUMN_GAP = 60;
-const ROW_GAP = 80;
+const COLUMN_GAP = 36;
+const ROW_GAP = 36;
 
 /** Colours carry the one distinction that matters at a glance. */
 export const COLOR_USER = "6";
 export const COLOR_ASSISTANT = "5";
 
 export function estimateHeight(text: string): number {
-	// ~55 characters per line at this width, ~22px per line, plus padding.
-	const lines = text.split("\n").reduce((sum, line) => sum + Math.max(1, Math.ceil(line.length / 55)), 0);
-	return Math.min(MAX_HEIGHT, Math.max(MIN_HEIGHT, lines * 22 + 40));
+	const lines = text.split("\n").reduce((sum, line) => sum + Math.max(1, Math.ceil(line.length / 48)), 0);
+	return Math.min(MAX_HEIGHT, Math.max(MIN_HEIGHT, lines * 20 + 28));
 }
 
 export function newId(): string {

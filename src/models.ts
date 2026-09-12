@@ -47,3 +47,37 @@ export function explainMissingModel(message: string): string | null {
 	if (!/not found/i.test(message) || !/model/i.test(message)) return null;
 	return `${message.replace(/\s+/g, " ").trim()} — that name is not on this server. Use an id from the composer list, or \`ollama pull\` it first.`;
 }
+
+function textFromContent(content: unknown): string {
+	if (typeof content === "string") return content;
+	if (!Array.isArray(content)) return "";
+	return content
+		.map((part) => {
+			if (typeof part === "string") return part;
+			if (part && typeof part === "object" && typeof (part as { text?: unknown }).text === "string") {
+				return (part as { text: string }).text;
+			}
+			return "";
+		})
+		.join("");
+}
+
+/** The assistant text from a non-streaming chat.completions (or Ollama) body. */
+export function extractCompletion(payload: unknown): string {
+	if (!payload || typeof payload !== "object") return "";
+	const body = payload as {
+		choices?: { message?: { content?: unknown }; text?: unknown; delta?: { content?: unknown } }[];
+		message?: { content?: unknown };
+		response?: unknown;
+		error?: { message?: unknown } | string;
+	};
+	if (body.error) return "";
+	const choice = body.choices?.[0];
+	const fromChoice = textFromContent(choice?.message?.content) || textFromContent(choice?.delta?.content);
+	if (fromChoice) return fromChoice;
+	if (typeof choice?.text === "string" && choice.text) return choice.text;
+	const fromMessage = textFromContent(body.message?.content);
+	if (fromMessage) return fromMessage;
+	if (typeof body.response === "string") return body.response;
+	return "";
+}

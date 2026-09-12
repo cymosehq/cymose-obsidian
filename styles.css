@@ -7,13 +7,13 @@
 .cymose-dock {
 	position: absolute;
 	left: 50%;
-	bottom: 20px;
+	bottom: 16px;
 	transform: translateX(-50%);
-	width: min(640px, calc(100% - 32px));
+	width: min(480px, calc(100% - 24px));
 	z-index: 30;
 	display: flex;
 	flex-direction: column;
-	gap: 8px;
+	gap: 6px;
 	pointer-events: auto;
 }
 
@@ -66,8 +66,8 @@
 .cymose-dock-hint {
 	flex: 1;
 	min-width: 0;
-	font-size: var(--font-ui-smaller);
-	color: var(--text-muted);
+	font-size: var(--font-ui-small);
+	color: var(--text-normal);
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
@@ -80,9 +80,9 @@
 }
 
 .cymose-composer {
-	padding: 8px 8px 6px;
+	padding: 10px 10px 8px;
 	border: 1px solid var(--background-modifier-border);
-	border-radius: 12px;
+	border-radius: 14px;
 	background: var(--background-primary);
 	box-shadow: var(--shadow-l);
 }
@@ -90,14 +90,14 @@
 .cymose-prompt {
 	width: 100%;
 	resize: none;
-	min-height: 44px;
-	max-height: 160px;
-	padding: 4px 6px;
+	min-height: 72px;
+	max-height: 200px;
+	padding: 6px 8px;
 	border: none;
 	box-shadow: none;
 	background: transparent;
 	font-family: var(--font-text);
-	font-size: var(--font-ui-small);
+	font-size: var(--font-text-size);
 	line-height: 1.45;
 }
 
@@ -109,36 +109,50 @@
 .cymose-composer-bar {
 	display: flex;
 	align-items: center;
-	gap: 4px;
-	padding-top: 4px;
+	gap: 8px;
+	padding-top: 6px;
+}
+
+.cymose-extras {
+	display: none;
+	padding-top: 8px;
+	margin-top: 4px;
+	border-top: 1px solid var(--background-modifier-border);
+}
+
+.cymose-extras.is-open { display: block; }
+
+.cymose-extras-row {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding-top: 6px;
 }
 
 .cymose-instructions {
 	width: 100%;
 	resize: none;
-	min-height: 28px;
+	min-height: 44px;
 	max-height: 80px;
-	padding: 2px 6px 6px;
-	border: none;
-	border-bottom: 1px solid var(--background-modifier-border);
-	border-radius: 0;
+	padding: 6px 8px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 8px;
 	box-shadow: none;
-	background: transparent;
+	background: var(--background-secondary);
 	font-family: var(--font-text);
-	font-size: var(--font-ui-smaller);
+	font-size: var(--font-ui-small);
 	color: var(--text-muted);
 	line-height: 1.4;
 }
 
 .cymose-instructions:focus {
-	box-shadow: none;
-	border-bottom-color: var(--background-modifier-border-focus);
 	color: var(--text-normal);
 }
 
 .cymose-model-input {
 	flex: 1;
 	min-width: 0;
+	max-width: 220px;
 	font-size: var(--font-ui-smaller);
 }
 

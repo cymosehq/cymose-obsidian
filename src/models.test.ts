@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { explainMissingModel, isCymoseHostedModel, readModelIds, shortModelLabel } from "./models";
+import { explainMissingModel, extractCompletion, isCymoseHostedModel, readModelIds, shortModelLabel } from "./models";
 
 describe("shortModelLabel", () => {
 	it("uses a short name for known ids and the last path segment otherwise", () => {
@@ -41,5 +41,15 @@ describe("explainMissingModel", () => {
 		const text = explainMissingModel("model 'llama3.2' not found");
 		expect(text).toMatch(/ollama pull/);
 		expect(text).toMatch(/llama3\.2/);
+	});
+});
+
+describe("extractCompletion", () => {
+	it("reads OpenAI chat.completions", () => {
+		expect(extractCompletion({ choices: [{ message: { content: "hello" } }] })).toBe("hello");
+	});
+
+	it("reads Ollama's native chat body", () => {
+		expect(extractCompletion({ message: { content: "привет" } })).toBe("привет");
 	});
 });

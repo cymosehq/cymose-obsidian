@@ -14,7 +14,6 @@ import {
 	sanitizeCanvasMarkers,
 	setPromoted,
 	textForModel,
-	withModelTag,
 	writeCanvas,
 } from "./canvas";
 import { selectNode, selectedNodeId } from "./canvas-api";
@@ -83,6 +82,8 @@ export class CymoseOverlay {
 	private data: CanvasData = { nodes: [], edges: [] };
 	private parentId: string | null = null;
 	private lastSeenSelection: string | null = null;
+	/** Only true after the New root button. Clicking a card, or sending, clears it. */
+	private wantNewRoot = false;
 	private sending = false;
 	private streamed = "";
 	private abort: AbortController | null = null;
@@ -104,6 +105,8 @@ export class CymoseOverlay {
 	private stopButton!: HTMLButtonElement;
 	private exploreButton!: HTMLButtonElement;
 	private newRootButton!: HTMLButtonElement;
+	private moreButton!: HTMLButtonElement;
+	private extrasEl!: HTMLElement;
 
 	private refs: EventRef[] = [];
 	private poll: number | null = null;
@@ -175,26 +178,21 @@ export class CymoseOverlay {
 		this.errorBox.hide();
 
 		const meta = root.createDiv({ cls: "cymose-dock-meta" });
-		this.hintEl = meta.createDiv({ cls: "cymose-dock-hint", text: "Ask anything — it becomes a node." });
+		this.hintEl = meta.createDiv({ cls: "cymose-dock-hint", text: "Message" });
 		const metaActions = meta.createDiv({ cls: "cymose-dock-actions" });
-		this.newRootButton = metaActions.createEl("button", { cls: "cymose-ghost-btn", text: "New root" });
-		this.newRootButton.title = "Don't reply under a card. Start another thread on this canvas.";
-		this.newRootButton.onclick = () => this.setTarget(null);
+		this.moreButton = metaActions.createEl("button", { cls: "cymose-ghost-btn", text: "More" });
+		this.moreButton.title = "Instructions, temperature, Explore 3";
+		this.newRootButton = metaActions.createEl("button", { cls: "cymose-ghost-btn", text: "New thread" });
+		this.newRootButton.title = "Start another thread on this canvas.";
+		this.newRootButton.onclick = () => {
+			this.wantNewRoot = true;
+			this.setTarget(null);
+		};
 
 		const composer = root.createDiv({ cls: "cymose-composer" });
-		this.instructions = composer.createEl("textarea", { cls: "cymose-instructions" });
-		this.instructions.rows = 1;
-		this.instructions.placeholder = "Instructions (optional) — how the model should answer on this canvas";
-		this.instructions.title = "How the model should answer. Sent as the system message.";
-		this.instructions.value = this.plugin.settings.systemPrompt;
-		this.instructions.addEventListener("change", () => {
-			this.plugin.settings.systemPrompt = this.instructions.value;
-			void this.plugin.saveSettings();
-		});
-
 		this.prompt = composer.createEl("textarea", { cls: "cymose-prompt" });
-		this.prompt.rows = 2;
-		this.prompt.placeholder = "Select a card to reply under it, or start a new root…";
+		this.prompt.rows = 3;
+		this.prompt.placeholder = "Message";
 		this.prompt.addEventListener("input", () => this.fitPrompt());
 		this.prompt.addEventListener("keydown", (event) => {
 			if (event.key === "Escape" && this.abort) {
@@ -225,7 +223,27 @@ export class CymoseOverlay {
 		this.modelInput.addEventListener("change", () => void this.chooseModel(this.modelInput.value.trim()));
 		this.populateModels();
 
-		const tempWrap = bar.createDiv({ cls: "cymose-temp" });
+		this.sendButton = bar.createEl("button", { cls: "mod-cta cymose-send-btn", text: "Send" });
+		this.sendButton.title = "Enter to send · Shift+Enter for a new line";
+		this.sendButton.onclick = () => void this.send();
+
+		this.stopButton = bar.createEl("button", { cls: "mod-warning cymose-send-btn", text: "Stop" });
+		this.stopButton.title = "Stop. What already streamed is kept.";
+		this.stopButton.onclick = () => this.abort?.abort();
+		this.stopButton.hide();
+
+		this.extrasEl = composer.createDiv({ cls: "cymose-extras" });
+		this.instructions = this.extrasEl.createEl("textarea", { cls: "cymose-instructions" });
+		this.instructions.rows = 2;
+		this.instructions.placeholder = "Instructions for the model";
+		this.instructions.value = this.plugin.settings.systemPrompt;
+		this.instructions.addEventListener("change", () => {
+			this.plugin.settings.systemPrompt = this.instructions.value;
+			void this.plugin.saveSettings();
+		});
+
+		const extrasRow = this.extrasEl.createDiv({ cls: "cymose-extras-row" });
+		const tempWrap = extrasRow.createDiv({ cls: "cymose-temp" });
 		tempWrap.createSpan({ cls: "cymose-temp-label", text: "Temp" });
 		this.tempInput = tempWrap.createEl("input");
 		this.tempInput.type = "range";
@@ -241,18 +259,14 @@ export class CymoseOverlay {
 		});
 		this.tempInput.addEventListener("change", () => void this.plugin.saveSettings());
 
-		this.exploreButton = bar.createEl("button", { cls: "cymose-ghost-btn", text: "Explore 3" });
+		this.exploreButton = extrasRow.createEl("button", { cls: "cymose-ghost-btn", text: "Explore 3" });
 		this.exploreButton.title = "⌘/Ctrl+Enter — three different answers under this question.";
 		this.exploreButton.onclick = () => void this.explore();
 
-		this.sendButton = bar.createEl("button", { cls: "mod-cta cymose-send-btn", text: "Send" });
-		this.sendButton.title = "Enter to send · Shift+Enter for a new line";
-		this.sendButton.onclick = () => void this.send();
-
-		this.stopButton = bar.createEl("button", { cls: "mod-warning cymose-send-btn", text: "Stop" });
-		this.stopButton.title = "Stop. What already streamed is kept.";
-		this.stopButton.onclick = () => this.abort?.abort();
-		this.stopButton.hide();
+		this.moreButton.onclick = () => {
+			this.extrasEl.toggleClass("is-open", !this.extrasEl.hasClass("is-open"));
+			this.moreButton.setText(this.extrasEl.hasClass("is-open") ? "Less" : "More");
+		};
 
 		this.refreshSetup();
 		this.refreshHint();
@@ -264,7 +278,10 @@ export class CymoseOverlay {
 
 	setTarget(id: string | null): void {
 		this.parentId = id;
-		if (id) this.lastSeenSelection = id;
+		if (id) {
+			this.lastSeenSelection = id;
+			this.wantNewRoot = false;
+		}
 		this.refreshHint();
 	}
 
@@ -291,6 +308,7 @@ export class CymoseOverlay {
 		if (!selected || selected === this.lastSeenSelection) return;
 		this.lastSeenSelection = selected;
 		if (!this.data.nodes.some((n) => n.id === selected)) return;
+		this.wantNewRoot = false;
 		this.parentId = selected;
 		this.refreshHint();
 	}
@@ -301,19 +319,37 @@ export class CymoseOverlay {
 		if (!this.data.nodes.some((n) => n.id === this.parentId)) this.parentId = null;
 	}
 
+	/**
+	 * Who the next Send hangs under.
+	 *
+	 * A conversation continues until you click another card or New root.
+	 * An empty canvas selection is not a new thread — writing the .canvas file
+	 * clears Obsidian's selection, and treating that as New root made every
+	 * turn an island.
+	 */
+	private replyParent(): string | null {
+		if (this.wantNewRoot) return null;
+		if (this.parentId && this.data.nodes.some((n) => n.id === this.parentId)) return this.parentId;
+		if (!this.data.nodes.length) return null;
+		return this.data.nodes[this.data.nodes.length - 1]?.id ?? null;
+	}
+
 	private refreshHint(): void {
 		if (!this.hintEl) return;
-		const node = this.parentId ? this.data.nodes.find((n) => n.id === this.parentId) : null;
-		if (!node) {
+		const parentId = this.replyParent();
+		const node = parentId ? this.data.nodes.find((n) => n.id === parentId) : null;
+		if (this.wantNewRoot || !node) {
 			this.hintEl.setText(
-				this.data.nodes.length
-					? "New root — Send adds a new thread. Click a card to reply under it."
-					: "Send creates the first card. Click a card later to reply under it.",
+				this.data.nodes.length && this.wantNewRoot
+					? "New thread"
+					: this.data.nodes.length
+						? "Replying to latest"
+						: "New conversation",
 			);
 		} else {
-			this.hintEl.setText(`Reply under “${label(node, 48)}”`);
+			this.hintEl.setText(`Replying to “${label(node, 40)}”`);
 		}
-		if (this.newRootButton) this.newRootButton.disabled = !this.parentId || this.sending;
+		if (this.newRootButton) this.newRootButton.disabled = this.wantNewRoot || this.sending;
 	}
 
 	private populateModels(): void {
@@ -360,13 +396,9 @@ export class CymoseOverlay {
 		await this.plugin.saveSettings();
 	}
 
-	private modelLabel(id: string): string {
-		return shortModelLabel(id);
-	}
-
 	private fitPrompt(): void {
 		this.prompt.style.height = "auto";
-		this.prompt.style.height = `${Math.min(this.prompt.scrollHeight, 160)}px`;
+		this.prompt.style.height = `${Math.min(this.prompt.scrollHeight, 200)}px`;
 	}
 
 	/** Settings changed while this dock is already mounted. */
@@ -392,7 +424,7 @@ export class CymoseOverlay {
 		this.instructions.disabled = this.sending;
 		this.sendButton.disabled = needs || this.sending;
 		this.exploreButton.disabled = needs || this.sending;
-		if (this.newRootButton) this.newRootButton.disabled = !this.parentId || this.sending;
+		if (this.newRootButton) this.newRootButton.disabled = this.wantNewRoot || this.sending;
 		if (document.activeElement !== this.modelInput) this.populateModels();
 		this.syncTemperature();
 		if (!this.sending && this.instructions && document.activeElement !== this.instructions) {
@@ -549,7 +581,9 @@ export class CymoseOverlay {
 		this.begin();
 		try {
 			this.data = await readCanvas(this.app.vault, file);
-			const question = appendNode(this.data, this.parentId, text, COLOR_USER);
+			const parent = this.replyParent();
+			this.wantNewRoot = false;
+			const question = appendNode(this.data, parent, text, COLOR_USER);
 			const answerNode = appendNode(this.data, question.id, STREAM_PLACEHOLDER, COLOR_ASSISTANT);
 			answerId = answerNode.id;
 			await writeCanvas(this.app.vault, file, this.data);
@@ -565,9 +599,7 @@ export class CymoseOverlay {
 				this.setTarget(question.id);
 				return;
 			}
-			const answer = streamed
-				? withModelTag(streamed, this.modelLabel(usedModel))
-				: "_(the model returned nothing)_";
+			const answer = streamed || "_(the model returned nothing)_";
 			await this.writeNodeText(file, answerNode.id, answer);
 			if (this.stopped) new Notice("Cymose: stopped — kept the partial answer.");
 
@@ -576,6 +608,7 @@ export class CymoseOverlay {
 			await this.reload();
 			this.setTarget(answerNode.id);
 			selectNode(this.app, answerNode.id);
+			this.focusPrompt();
 		} catch (error) {
 			this.fail(error);
 			if (answerId) await this.salvage(file, answerId, usedModel);
@@ -589,7 +622,7 @@ export class CymoseOverlay {
 		const partial = stripServerMarkers(this.streamed).trim();
 		try {
 			if (partial) {
-				await this.writeNodeText(file, nodeId, withModelTag(partial, this.modelLabel(model)));
+				await this.writeNodeText(file, nodeId, partial);
 			} else {
 				await this.patchCanvas(file, (data) => removeNode(data, nodeId));
 			}
@@ -612,7 +645,9 @@ export class CymoseOverlay {
 		this.begin();
 		try {
 			this.data = await readCanvas(this.app.vault, file);
-			const question = appendNode(this.data, this.parentId, text, COLOR_USER);
+			const parent = this.replyParent();
+			this.wantNewRoot = false;
+			const question = appendNode(this.data, parent, text, COLOR_USER);
 			await writeCanvas(this.app.vault, file, this.data);
 
 			const base = await this.buildMessages(question.id);
@@ -639,7 +674,7 @@ export class CymoseOverlay {
 					break;
 				}
 				if (answer) {
-					await this.writeNodeText(file, branch.id, withModelTag(caption + answer, this.modelLabel(usedModel)));
+					await this.writeNodeText(file, branch.id, caption + answer);
 					written += 1;
 				} else {
 					await this.patchCanvas(file, (data) => removeNode(data, branch.id));

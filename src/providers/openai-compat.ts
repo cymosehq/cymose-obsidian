@@ -1,6 +1,8 @@
+import { requestUrl } from "obsidian";
+import { extractCompletion } from "../models";
 import { ModelAdapter, Message, ModelOptions, ProviderError } from "./types";
 
-/** OpenAI-compatible chat.completions streaming. One dialect, many vendors. */
+/** OpenAI-compatible chat.completions. Local servers do not stream in Obsidian. */
 export class OpenAICompatAdapter implements ModelAdapter {
 	readonly id: string;
 
@@ -31,16 +33,26 @@ export class OpenAICompatAdapter implements ModelAdapter {
 		};
 		if (this.opts.apiKey.trim()) headers.Authorization = `Bearer ${this.opts.apiKey.trim()}`;
 
+		const payload = {
+			model: options.model,
+			messages,
+			temperature: options.temperature,
+			max_tokens: options.maxTokens,
+		};
+
+		// fetch SSE to 127.0.0.1 from the Obsidian renderer often never
+		// delivers chunks — Ollama finishes, the canvas stays on "…" and Stop.
+		// requestUrl waits for the whole JSON body, which is how every other
+		// plugin talks to localhost.
+		if (this.id === "custom" || isLoopback(base)) {
+			yield await completeOnce(`${base}/chat/completions`, headers, payload, signal);
+			return;
+		}
+
 		const response = await fetch(`${base}/chat/completions`, {
 			method: "POST",
 			headers,
-			body: JSON.stringify({
-				model: options.model,
-				messages,
-				temperature: options.temperature,
-				max_tokens: options.maxTokens,
-				stream: true,
-			}),
+			body: JSON.stringify({ ...payload, stream: true }),
 			signal,
 		});
 
@@ -53,40 +65,107 @@ export class OpenAICompatAdapter implements ModelAdapter {
 	}
 }
 
+function isLoopback(base: string): boolean {
+	try {
+		const host = new URL(base).hostname;
+		return host === "localhost" || host === "127.0.0.1" || host === "0.0.0.0" || host === "::1";
+	} catch {
+		return false;
+	}
+}
+
+async function completeOnce(
+	url: string,
+	headers: Record<string, string>,
+	payload: object,
+	signal?: AbortSignal,
+): Promise<string> {
+	if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+
+	let response;
+	try {
+		response = await requestUrl({
+			url,
+			method: "POST",
+			headers,
+			body: JSON.stringify({ ...payload, stream: false }),
+			throw: false,
+		});
+	} catch (error) {
+		if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+		throw new ProviderError(0, `Couldn't reach the model — ${(error as Error).message}`);
+	}
+
+	if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+	if (response.status >= 400) {
+		throw new ProviderError(response.status, extractMessage(response.text) || `HTTP ${response.status}`);
+	}
+
+	const text = extractCompletion(response.json) || extractCompletion(tryJson(response.text));
+	if (!text.trim()) {
+		throw new ProviderError(502, "The model returned an empty answer.");
+	}
+	return text;
+}
+
+function tryJson(text: string): unknown {
+	try {
+		return JSON.parse(text) as unknown;
+	} catch {
+		return null;
+	}
+}
+
 export async function* readOpenAIStream(body: ReadableStream<Uint8Array>): AsyncGenerator<string> {
 	const reader = body.getReader();
 	const decoder = new TextDecoder();
 	let buffer = "";
 
+	const consume = function* (chunk: string): Generator<string> {
+		for (const line of chunk.split("\n")) {
+			const delta = deltaFromSseLine(line);
+			if (delta) yield delta;
+		}
+	};
+
 	while (true) {
 		const { done, value } = await reader.read();
-		if (done) break;
+		if (done) {
+			buffer += decoder.decode();
+			if (buffer.trim()) {
+				const whole = extractCompletion(tryJson(buffer));
+				if (whole) {
+					yield whole;
+					return;
+				}
+				yield* consume(buffer);
+			}
+			return;
+		}
 		buffer += decoder.decode(value, { stream: true });
 		const lines = buffer.split("\n");
 		buffer = lines.pop() ?? "";
-
-		for (const line of lines) {
-			if (!line.startsWith("data:")) continue;
-			const data = line.slice(5).trim();
-			if (!data || data === "[DONE]") continue;
-
-			let event: {
-				choices?: { delta?: { content?: string | { text?: string }[] } }[];
-				error?: { message?: string; code?: number };
-			};
-			try {
-				event = JSON.parse(data) as typeof event;
-			} catch {
-				continue;
-			}
-			if (event.error) {
-				throw new ProviderError(event.error.code ?? 502, event.error.message ?? "Upstream error");
-			}
-			const raw = event.choices?.[0]?.delta?.content;
-			const delta = typeof raw === "string" ? raw : raw?.map((part) => part.text ?? "").join("");
-			if (delta) yield delta;
-		}
+		yield* consume(lines.join("\n") + "\n");
 	}
+}
+
+export function deltaFromSseLine(line: string): string {
+	if (!line.startsWith("data:")) return "";
+	const data = line.slice(5).trim();
+	if (!data || data === "[DONE]") return "";
+	let event: {
+		choices?: { delta?: { content?: unknown }; message?: { content?: unknown } }[];
+		error?: { message?: string; code?: number };
+	};
+	try {
+		event = JSON.parse(data) as typeof event;
+	} catch {
+		return "";
+	}
+	if (event.error) {
+		throw new ProviderError(event.error.code ?? 502, event.error.message ?? "Upstream error");
+	}
+	return extractCompletion(event);
 }
 
 export function extractMessage(body: string): string {
