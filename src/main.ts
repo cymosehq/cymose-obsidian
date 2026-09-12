@@ -36,21 +36,9 @@ import { isCymoseHostedModel, readModelIds } from "./models";
 // A turn goes to the provider in settings, on the user's key. Cymose is not
 // in that path. The conversation itself lives only in the vault.
 
-/**
- * Bring a leaf into view, on every Obsidian this plugin claims to support.
- *
- * `revealLeaf` returned void for years and returns a Promise in recent
- * versions. Awaiting it is what the community reviewer flags as
- * `no-unsupported-api`: the await only makes sense on an API newer than the
- * declared minAppVersion of 1.5.0, so on 1.5.0 the plugin would be calling
- * something that is not there in the shape it expects.
- *
- * Calling and not awaiting is correct on both. There is nothing after it that
- * depends on the reveal having finished — the leaf is returned either way, and
- * the panel renders when Obsidian gets to it.
- */
+/** Show a leaf. `revealLeaf` exists since 1.7.2, matching `minAppVersion`. */
 function revealLeaf(app: App, leaf: WorkspaceLeaf): void {
-	void (app.workspace.revealLeaf(leaf) as unknown as void | Promise<void>);
+	void app.workspace.revealLeaf(leaf);
 }
 
 // The Cymose mark (shared/brand/mark-cyme.svg): an upside-down Y — a stem into a

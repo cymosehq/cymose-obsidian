@@ -397,8 +397,8 @@ export class CymoseOverlay {
 	}
 
 	private fitPrompt(): void {
-		this.prompt.style.height = "auto";
-		this.prompt.style.height = `${Math.min(this.prompt.scrollHeight, 200)}px`;
+		this.prompt.setCssStyles({ height: "auto" });
+		this.prompt.setCssStyles({ height: `${Math.min(this.prompt.scrollHeight, 200)}px` });
 	}
 
 	/** Settings changed while this dock is already mounted. */

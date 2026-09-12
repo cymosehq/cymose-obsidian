@@ -1,8 +1,8 @@
 {
 	"id": "cymose",
 	"name": "Cymose",
-	"version": "0.5.0",
-	"minAppVersion": "1.5.0",
+	"version": "0.5.1",
+	"minAppVersion": "1.7.2",
 	"description": "Branch an AI conversation across a real canvas. Ask three ways at once and keep the one that held up — along with the two that didn't, because knowing what fails is a result. Every node is a .canvas file in your vault.",
 	"author": "Cymose",
 	"authorUrl": "https://cymose.app",
