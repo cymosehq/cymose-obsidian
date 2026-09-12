@@ -1,9 +1,9 @@
 {
 	"id": "cymose",
-	"name": "Cymose", 
+	"name": "Cymose",
 	"version": "0.5.0",
 	"minAppVersion": "1.5.0",
-	"description": "Branch an AI conversation across a real canvas instead of one linear chat. Ask a question three ways at once, then promote what held up so later branches inherit it. Every message is a node in a .canvas file in your vault.",
+	"description": "Branch an AI conversation across a real canvas. Ask three ways at once and keep the one that held up — along with the two that didn't, because knowing what fails is a result. Every node is a .canvas file in your vault.",
 	"author": "Cymose",
 	"authorUrl": "https://cymose.app",
 	"isDesktopOnly": false
